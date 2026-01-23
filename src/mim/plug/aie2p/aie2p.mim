@@ -1,0 +1,5 @@
+import core;
+import compile;
+
+axm %aie2p.get_coreid: [] -> I32;
+axm %aie2p.lower_pass: %compile.Pass;
