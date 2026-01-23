@@ -330,20 +330,79 @@ void Emitter::start() {
 void Emitter::emit_imported(Lam* lam) {
     if (!declared_externs_.insert(lam).second) return;
     // TODO merge with declare method
-    print(func_decls_, "declare {} {}(", convert_fn_ret(lam->type()), id(lam));
-
-    auto doms = lam->doms();
-    auto view = doms.view();
-    if (Pi::isa_returning(lam->type())) {
+    
+    auto pi = lam->type();
+    std::string ret_type;
+    std::vector<const Def*> param_doms;
+    
+    // Handle CPS functions: Cn [dom, Cn ret]
+    if (auto cps_pi = Pi::isa_cn(pi)) {
+        // Extract return type from continuation: Cn I32 -> I32
+        auto cont = cps_pi->dom();
+        if (auto sigma = cont->isa<Sigma>()) {
+            // For Cn [[], Cn I32], sigma has 2 elements: [] and Cn I32
+            // Extract parameters from first element(s), return type from continuation
+            if (sigma->num_ops() >= 2) {
+                // Get the continuation (last element)
+                auto cont_pi = Pi::isa_cn(sigma->op(sigma->num_ops() - 1));
+                if (cont_pi) {
+                    // Return type is the domain of the continuation
+                    auto ret_dom = mem::strip_mem_ty(cont_pi->dom());
+                    if (ret_dom && ret_dom != world().sigma()) {
+                        ret_type = convert(ret_dom);
+                    } else {
+                        ret_type = "void";
+                    }
+                } else {
+                    ret_type = "void";
+                }
+                
+                // Parameters are all elements except the last (continuation)
+                // Skip unit (world().sigma()) - it becomes no parameters
+                for (size_t i = 0; i < sigma->num_ops() - 1; ++i) {
+                    auto dom = sigma->op(i);
+                    if (!Axm::isa<mem::M>(dom) && dom != world().sigma()) {
+                        param_doms.push_back(dom);
+                    }
+                }
+            } else {
+                ret_type = "void";
+            }
+        } else {
+            ret_type = "void";
+        }
+    } else if (Pi::isa_returning(pi)) {
+        // Returning function: extract from ret_pi
+        ret_type = convert_fn_ret(pi);
+        auto doms = lam->doms();
+        auto view = doms.view();
         // Avoid UB on empty domains.
         if (!doms.empty()) view = view.rsubspan(1);
+        for (auto dom : view) {
+            if (!Axm::isa<mem::M>(dom) && dom != world().sigma()) {
+                param_doms.push_back(dom);
+            }
+        }
+    } else {
+        // Direct-style function (shouldn't happen at this stage, but handle it)
+        ret_type = convert_fn_ret(pi);
+        auto doms = lam->doms();
+        for (auto dom : doms.view()) {
+            if (!Axm::isa<mem::M>(dom) && dom != world().sigma()) {
+                param_doms.push_back(dom);
+            }
+        }
     }
-    for (auto sep = ""; auto dom : view) {
-        if (Axm::isa<mem::M>(dom)) continue;
+    
+    if (ret_type.empty()) ret_type = "void";
+    
+    print(func_decls_, "declare {} {}(", ret_type, id(lam));
+    
+    for (auto sep = ""; auto dom : param_doms) {
         print(func_decls_, "{}{}", sep, convert(dom));
         sep = ", ";
     }
-
+    
     print(func_decls_, ")\n");
 }
 
@@ -496,8 +555,14 @@ void Emitter::emit_epilogue(Lam* lam) {
 
         std::vector<std::string> args;
         auto app_args = app->args();
-        for (auto arg : app_args.view().rsubspan(1))
-            if (auto v_arg = emit_unsafe(arg); !v_arg.empty()) args.emplace_back(convert(arg->type()) + " " + v_arg);
+        // Skip the last argument (continuation) and filter out unit/mem arguments
+        for (auto arg : app_args.view().rsubspan(1)) {
+            if (Axm::isa<mem::M>(arg->type())) continue;
+            if (arg->type() == world().sigma()) continue; // Skip unit
+            if (auto v_arg = emit_unsafe(arg); !v_arg.empty()) {
+                args.emplace_back(convert(arg->type()) + " " + v_arg);
+            }
+        }
 
         if (app->args().back()->isa<Bot>()) {
             // TODO: Perhaps it'd be better to simply η-wrap this prior to the BE...
@@ -564,46 +629,6 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
     auto name = id(def);
     std::string op;
 
-    // --- Direct-style (non-CPS) function calls used as values ----------------
-    // Example: llvm.aie2p.get.coreid : [] -> I32
-    // In CPS code it often appears nested, e.g.:
-    //   return_k (llvm.aie2p.get.coreid ())
-    //
-    // The existing backend only handled Pi::isa_returning(...) calls in emit_epilogue.
-    // This adds support for direct-style calls in value position.
-
-    if (auto app = def->isa<App>()) {
-        auto pi = app->callee_type();
-        // Only handle true direct-style function calls where the callee is a Lam,
-        // and the function type is not CPS-returning, not a BB, and not dependent.
-        if (pi && !Pi::isa_basicblock(pi) && !Pi::isa_returning(pi) && !pi->has_var()) {
-            auto callee_lam = app->callee()->isa_mut<Lam>();
-            if (callee_lam) {
-                // Declare external/unset lams once.
-                if ((callee_lam->is_external() || !callee_lam->is_set()) && declared_externs_.insert(callee_lam).second)
-                    emit_imported(callee_lam);
-
-                auto v_callee = emit(app->callee());
-
-                std::vector<std::string> args;
-                args.reserve(app->args().size());
-                for (auto arg : app->args()) {
-                    if (auto v_arg = emit_unsafe(arg); !v_arg.empty()) {
-                        auto ty = arg->type();
-                        if (auto t = isa_mem_sigma_2(ty)) ty = t; // erase [%mem.M, X] -> X
-                        args.emplace_back(convert(ty) + " " + v_arg);
-                    }
-                }
-
-                auto t_ret = convert_fn_ret(pi);
-                if (t_ret == "void") {
-                    print(bb.body().emplace_back(), "call void {}({, })", v_callee, args);
-                    return {};
-                }
-                return bb.assign(name, "call {} {}({, })", t_ret, v_callee, args);
-            }
-        }
-    }
     auto emit_tuple = [&](const Def* tuple) {
         if (isa_mem_sigma_2(tuple->type())) {
             emit_unsafe(tuple->proj(2, 0));
@@ -642,12 +667,6 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
         }
         return prev;
     };
-    if (isa_mem_sigma_2(def->type())) {
-        emit_unsafe(def->proj(2, 0));   // mem effect
-        auto v = emit(def->proj(2, 1)); // payload
-        if (!v.empty()) locals_[def] = v;
-        return v;
-    }
 
     if (def->isa<Var>()) {
         auto ts = def->type()->projs();
