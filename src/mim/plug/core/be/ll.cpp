@@ -155,7 +155,6 @@ private:
     std::unordered_set<const Def*> in_emit_bb_;
 
     std::unordered_set<const Lam*> declared_externs_;
-    std::unordered_set<const Sigma*> in_convert_sigmas_;
 
     std::unordered_set<const Def*> in_convert_types_;
 
@@ -253,39 +252,21 @@ std::string Emitter::convert(const Def* type) {
     } else if (auto t = isa_mem_sigma_2(type)) {
         return convert(t);
     } else if (auto sigma = type->isa<Sigma>()) {
-        auto sigma_name = [&](const Sigma* s) { return "%"s + s->unique_name(); };
-
-        const bool is_mut = sigma->isa_mut();
-        bool inserted     = false;
-
-        if (is_mut) {
-            name = sigma_name(sigma);
-
+        if (sigma->isa_mut()) {
+            name            = "%"s + sigma->unique_name();
             ll_types_[sigma] = name;
-
-            inserted = in_convert_sigmas_.insert(sigma).second;
-
             print(s, "{} = type", name);
         }
 
         s << '{';
 
-        for (auto sep = ""; auto t : sigma->projs()) {
+        for (auto sep = ""; auto t : sigma->ops()) {
             if (Axm::isa<mem::M>(t)) continue;
-
-            if (auto fld = t->isa<Sigma>();
-                fld && fld->isa_mut() && in_convert_sigmas_.find(fld) != in_convert_sigmas_.end()) {
-                s << sep << sigma_name(fld) << "*";
-            } else {
-                s << sep << convert(t);
-            }
-
+            s << sep << convert(t);
             sep = ", ";
         }
 
         s << '}';
-
-        if (inserted) in_convert_sigmas_.erase(sigma);
     } else {
         fe::unreachable();
     }
