@@ -16,6 +16,7 @@ public:
 private:
     const Def* llvm_get_coreid_wrapped_ = nullptr;
     const Def* llvm_clb_wrapped_ = nullptr;
+    const Def* llvm_srs_i16_32_wrapped_ = nullptr;
 };
 
 } // namespace mim::plug::aie2p::phase

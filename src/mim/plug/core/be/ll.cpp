@@ -187,6 +187,12 @@ std::string Emitter::convert(const Def* type) {
         auto [pointee, addr_space] = ptr->args<2>();
         // TODO addr_space
         print(s, "{}*", convert(pointee));
+    } else if (auto vec = Axm::isa<mem::Vec>(type)) {
+        auto [n, elem] = vec->args<2>();
+        u64 size = 0;
+        if (auto lit = Lit::isa(n)) size = *lit;
+        auto t_elem = convert(elem);
+        print(s, "<{} x {}>", size, t_elem);
     } else if (auto arr = type->isa<Arr>()) {
         auto t_elem = convert(arr->body());
         u64 size    = 0;
@@ -263,14 +269,26 @@ void Emitter::emit_imported(Lam* lam) {
 
     print(func_decls_, "declare {} {}(", convert_ret_pi(lam->type()->ret_pi()), sym);
 
-    auto doms = lam->doms();
+    auto doms       = lam->doms();
     const Pi* ret_pi = lam->type()->ret_pi();
+    bool is_llvm    = (sym.find("llvm.") != std::string::npos);
     for (auto sep = ""; auto dom : doms.view().rsubspan(1)) {
         if (Axm::isa<mem::M>(dom)) continue;
         if (dom == world().sigma()) continue;  // unit – not an LLVM arg
         if (ret_pi && dom == ret_pi) continue;  // CPS continuation – not an LLVM arg
-        print(func_decls_, "{}{}", sep, convert(dom));
-        sep = ", ";
+        if (is_llvm && dom->isa<Sigma>()) {
+            auto sigma = dom->as<Sigma>();
+            for (auto t : sigma->ops()) {
+                if (Axm::isa<mem::M>(t)) continue;
+                if (t == world().sigma()) continue;
+                if (ret_pi && t == ret_pi) continue;
+                print(func_decls_, "{}{}", sep, convert(t));
+                sep = ", ";
+            }
+        } else {
+            print(func_decls_, "{}{}", sep, convert(dom));
+            sep = ", ";
+        }
     }
 
     print(func_decls_, ")\n");
@@ -407,10 +425,35 @@ void Emitter::emit_epilogue(Lam* lam) {
         std::vector<std::string> args;
         auto app_args = app->args();
         const Pi* callee_ret_pi = app->callee_type()->ret_pi();
+        bool expand_sigma_for_llvm =
+            (v_callee.starts_with("@llvm.") || v_callee.find("@llvm.") != std::string::npos);
         for (auto arg : app_args.view().rsubspan(1)) {
             if (Axm::isa<mem::M>(arg->type())) continue;
             if (arg->type() == world().sigma()) continue;  // unit – not an LLVM arg
             if (callee_ret_pi && arg->type() == callee_ret_pi) continue;  // CPS continuation – not an LLVM arg
+
+            if (expand_sigma_for_llvm) {
+                if (auto tuple = arg->isa<Tuple>()) {
+                    if (auto sigma = tuple->type()->isa<Sigma>()) {
+                        bool has_mem = false;
+                        for (auto t : sigma->ops())
+                            if (Axm::isa<mem::M>(t)) {
+                                has_mem = true;
+                                break;
+                            }
+                        if (!has_mem && sigma->num_projs() >= 2) {
+                            for (size_t i = 0, n = tuple->num_projs(); i != n; ++i) {
+                                auto e = tuple->proj(n, i);
+                                if (Axm::isa<mem::M>(e->type())) continue;
+                                if (auto v = emit_unsafe(e); !v.empty())
+                                    args.emplace_back(convert(e->type()) + " " + v);
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
+
             if (auto v_arg = emit_unsafe(arg); !v_arg.empty()) args.emplace_back(convert(arg->type()) + " " + v_arg);
         }
 
