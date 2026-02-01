@@ -1,0 +1,20 @@
+plugin core;
+plugin compile;
+plugin direct;
+plugin aie2p;
+
+import compile;
+import direct;
+
+lam extern _compile (): %compile.Phase =
+    %compile.phases ff (
+        %aie2p.lower_aie2p_phase,
+        direct_phases,
+        %compile.internal_cleanup_phase,
+        %compile.branch_normalize_phase,
+        %compile.ret_wrap_phase
+    );
+
+fun extern main(x: I32): I32 =
+    let y = %aie2p.clb (x);
+    return y;
