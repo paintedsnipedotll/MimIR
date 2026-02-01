@@ -52,6 +52,15 @@ const Def* LowerAIE2P::rewrite_imm_App(const App* app) {
                                       "llvm.aie2p.clb", llvm_clb_wrapped_);
     }
 
+    if (Axm::isa<srs_i16_32>(app)) {
+        assert(app->arg() && app->arg()->type() && "srs_i16_32: missing arg/type");
+        auto dom = rewrite(app->arg()->type());
+        auto ret = rewrite(app->type());
+        if (!dom || !ret) return Rewriter::rewrite_imm_App(app);
+        return lower_to_cps_intrinsic(new_w, arg_rewritten, dom, ret,
+                                      "llvm.aie2p.I512.v32.acc64.srs", llvm_srs_i16_32_wrapped_);
+    }
+
     return Rewriter::rewrite_imm_App(app);
 }
 

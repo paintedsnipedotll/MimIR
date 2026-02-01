@@ -20,6 +20,12 @@ axm %mem.M: Nat → *;
 /// Pointer type with *pointee* type `T` and *address space* `a`.
 /// At the moment, the *address space* is not really used and a placeholder for future work.
 axm %mem.Ptr: [*, Nat] → *;
+///
+/// ### %%mem.Vec
+///
+/// LLVM SIMD vector type: `%%mem.Vec (n, T)` corresponds to `<n x T>` in LLVM.
+/// Used for AIE2P and other targets that emit vector operations.
+axm %mem.Vec: [Nat, *] → *;
 
 lam %mem.Ptr0(T: *): * = %mem.Ptr (T, 0);
 ///

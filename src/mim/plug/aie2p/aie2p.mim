@@ -1,7 +1,11 @@
 import core;
 import compile;
+import mem;
 
 axm %aie2p.get_coreid: [] -> I32;
 /// Count leading bits: (i32) -> i32. Maps to llvm.aie2p.clb.
 axm %aie2p.clb: I32 -> I32;
+/// Shift-round-saturate: (v32i64, i32 shift, i32 round_mode) -> v32i16.
+/// Maps to llvm.aie2p.I512.v32.acc64.srs.
+axm %aie2p.srs_i16_32: [%mem.Vec (32, I64), I32, I32] -> %mem.Vec (32, I16);
 axm %aie2p.lower_aie2p_phase: %compile.Phase;
