@@ -1,0 +1,31 @@
+plugin core;
+plugin compile;
+plugin direct;
+plugin mem;
+plugin aie2p;
+
+import compile;
+import direct;
+import mem;
+
+lam extern _compile (): %compile.Phase =
+    %compile.phases ff (
+        %aie2p.lower_aie2p_phase,
+        direct_phases,
+        %compile.internal_cleanup_phase,
+        %compile.branch_normalize_phase,
+        %compile.ret_wrap_phase
+    );
+
+/// CPS-style kernel:
+///   coreid_kernel : [mem: %mem.M 0, out: %mem.Ptr (I32)] -> Cn [%mem.M 0]
+///
+/// After running the direct CPS2DS machinery and LLVM backend, this should
+/// lower to a C-style function roughly like:
+///   void coreid_kernel(int32_t *out);
+///
+/// which writes the hardware core ID into *out.
+con extern coreid_kernel(mem: %mem.M 0, out: %mem.Ptr (I32, 0), return: Cn [%mem.M 0]) =
+    let id = %aie2p.get_coreid ();
+    let mem = %mem.store (mem, out, id);
+    return (mem);

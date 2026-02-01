@@ -34,7 +34,7 @@ lam extern _default_compile (): %compile.Phase =
         %compile.pass2phase (%compile.eta_red_pass ff),
         %compile.pass2phase %compile.tail_rec_elim_pass,
         %compile.pass2phase (cond_pass "regex" %regex.lower_regex),
-        %compile.pass2phase %aie2p.lower_pass,
+        cond_phase "aie2p" %aie2p.lower_aie2p_phase,
         // optimize
         %compile.phases tt (
             %compile.beta_red_phase,

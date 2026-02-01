@@ -4,8 +4,6 @@
 #include <fstream>
 #include <iomanip>
 #include <ranges>
-#include <unordered_map>
-#include <unordered_set>
 
 #include <absl/container/btree_set.h>
 
@@ -18,14 +16,6 @@
 #include "mim/util/sys.h"
 
 #include "mim/plug/core/core.h"
-
-static bool is_terminator(std::string_view line) {
-    while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
-        line.remove_prefix(1);
-    return line.rfind("ret", 0) == 0 || line.rfind("br", 0) == 0 || line.rfind("switch", 0) == 0
-        || line.rfind("indirectbr", 0) == 0 || line.rfind("invoke", 0) == 0 || line.rfind("resume", 0) == 0
-        || line.rfind("unreachable", 0) == 0;
-}
 
 // Lessons learned:
 // * **Always** follow all ops - even if you actually want to ignore one.
@@ -148,17 +138,9 @@ private:
     std::string id(const Def*, bool force_bb = false) const;
     std::string convert(const Def*);
     std::string convert_ret_pi(const Pi*);
-    std::string convert_fn_ret(const Pi*);
-
-    std::unordered_map<const Def*, std::string> ll_types_;
-
-    std::unordered_set<const Def*> in_emit_bb_;
-
-    std::unordered_set<const Lam*> declared_externs_;
-
-    std::unordered_set<const Def*> in_convert_types_;
 
     absl::btree_set<std::string> decls_;
+    absl::btree_set<std::string> declared_externs_;
     std::ostringstream type_decls_;
     std::ostringstream vars_decls_;
     std::ostringstream func_decls_;
@@ -173,8 +155,9 @@ std::string Emitter::id(const Def* def, bool force_bb /*= false*/) const {
     if (auto global = def->isa<Global>()) return "@" + global->unique_name();
 
     if (auto lam = def->isa_mut<Lam>(); lam && !force_bb) {
-        if (!Pi::isa_basicblock(lam->type())) {
-            if (lam->is_external() || !lam->is_set()) return "@"s + lam->sym().str();
+        if (lam->type()->ret_pi()) {
+            if (lam->is_external() || !lam->is_set())
+                return "@"s + lam->sym().str(); // TODO or use is_internal or sth like that?
             return "@"s + lam->unique_name();
         }
     }
@@ -183,40 +166,21 @@ std::string Emitter::id(const Def* def, bool force_bb /*= false*/) const {
 }
 
 std::string Emitter::convert(const Def* type) {
-    if (!type) {
-        auto [it, _] = ll_types_.try_emplace(nullptr, "i8*");
-        return it->second;
-    }
-    if (auto i = ll_types_.find(type); i != ll_types_.end()) return i->second;
-
-    auto [it_guard, inserted_guard] = in_convert_types_.insert(type);
-    struct ConvertGuard {
-        std::unordered_set<const Def*>& s;
-        const Def* d;
-        bool active;
-        ~ConvertGuard() {
-            if (active) s.erase(d);
-        }
-    } guard{in_convert_types_, type, inserted_guard};
-
-    if (!inserted_guard) return "i8*";
+    if (auto i = types_.find(type); i != types_.end()) return i->second;
 
     assert(!Axm::isa<mem::M>(type));
     std::ostringstream s;
     std::string name;
 
     if (type->isa<Nat>()) {
-        return ll_types_[type] = "i64";
-    } else if (Idx::isa(type)) {
-        if (auto size = Idx::isa(type)) {
-            if (auto w = Idx::size2bitwidth(size)) return ll_types_[type] = "i" + std::to_string(*w);
-        }
-        return ll_types_[type] = "i64";
+        return types_[type] = "i64";
+    } else if (auto size = Idx::isa(type)) {
+        return types_[type] = "i" + std::to_string(*Idx::size2bitwidth(size));
     } else if (auto w = math::isa_f(type)) {
         switch (*w) {
-            case 16: return ll_types_[type] = "half";
-            case 32: return ll_types_[type] = "float";
-            case 64: return ll_types_[type] = "double";
+            case 16: return types_[type] = "half";
+            case 32: return types_[type] = "float";
+            case 64: return types_[type] = "double";
             default: fe::unreachable();
         }
     } else if (auto ptr = Axm::isa<mem::Ptr>(type)) {
@@ -229,20 +193,14 @@ std::string Emitter::convert(const Def* type) {
         if (auto arity = Lit::isa(arr->arity())) size = *arity;
         print(s, "[{} x {}]", size, t_elem);
     } else if (auto pi = type->isa<Pi>()) {
-        if (pi->has_var()) return ll_types_[type] = "i8*";
-
-        assert(!Pi::isa_basicblock(pi) && "should never have to convert type of BB");
-        print(s, "{} (", convert_fn_ret(pi));
+        assert(Pi::isa_returning(pi) && "should never have to convert type of BB");
+        print(s, "{} (", convert_ret_pi(pi->ret_pi()));
 
         if (auto t = isa_mem_sigma_2(pi->dom()))
             s << convert(t);
         else {
             auto doms = pi->doms();
-            auto view = doms.view();
-            if (Pi::isa_returning(pi)) {
-                if (!doms.empty()) view = view.rsubspan(1);
-            }
-            for (auto sep = ""; auto dom : view) {
+            for (auto sep = ""; auto dom : doms.view().rsubspan(1)) {
                 if (Axm::isa<mem::M>(dom)) continue;
                 s << sep << convert(dom);
                 sep = ", ";
@@ -253,44 +211,33 @@ std::string Emitter::convert(const Def* type) {
         return convert(t);
     } else if (auto sigma = type->isa<Sigma>()) {
         if (sigma->isa_mut()) {
-            name            = "%"s + sigma->unique_name();
-            ll_types_[sigma] = name;
+            name          = id(sigma);
+            types_[sigma] = name;
             print(s, "{} = type", name);
         }
 
-        s << '{';
-
+        print(s, "{{");
         for (auto sep = ""; auto t : sigma->ops()) {
             if (Axm::isa<mem::M>(t)) continue;
             s << sep << convert(t);
             sep = ", ";
         }
-
-        s << '}';
+        print(s, "}}");
     } else {
         fe::unreachable();
     }
 
-    if (name.empty()) return ll_types_[type] = s.str();
+    if (name.empty()) return types_[type] = s.str();
 
     assert(!s.str().empty());
     type_decls_ << s.str() << '\n';
-    return ll_types_[type] = name;
+    return types_[type] = name;
 }
 
 std::string Emitter::convert_ret_pi(const Pi* pi) {
-    if (!pi) return "void";
     auto dom = mem::strip_mem_ty(pi->dom());
-    if (!dom || dom == world().sigma()) return "void";
+    if (dom == world().sigma()) return "void";
     return convert(dom);
-}
-
-std::string Emitter::convert_fn_ret(const Pi* pi) {
-    if (Pi::isa_returning(pi)) return convert_ret_pi(pi->ret_pi());
-
-    auto codom = mem::strip_mem_ty(pi->codom());
-    if (!codom || codom == world().sigma()) return "void";
-    return convert(codom);
 }
 
 /*
@@ -309,93 +256,31 @@ void Emitter::start() {
 }
 
 void Emitter::emit_imported(Lam* lam) {
-    if (!declared_externs_.insert(lam).second) return;
     // TODO merge with declare method
-    
-    auto pi = lam->type();
-    std::string ret_type;
-    std::vector<const Def*> param_doms;
-    
-    // Handle CPS functions: Cn [dom, Cn ret]
-    if (auto cps_pi = Pi::isa_cn(pi)) {
-        // Extract return type from continuation: Cn I32 -> I32
-        auto cont = cps_pi->dom();
-        if (auto sigma = cont->isa<Sigma>()) {
-            // For Cn [[], Cn I32], sigma has 2 elements: [] and Cn I32
-            // Extract parameters from first element(s), return type from continuation
-            if (sigma->num_ops() >= 2) {
-                // Get the continuation (last element)
-                auto cont_pi = Pi::isa_cn(sigma->op(sigma->num_ops() - 1));
-                if (cont_pi) {
-                    // Return type is the domain of the continuation
-                    auto ret_dom = mem::strip_mem_ty(cont_pi->dom());
-                    if (ret_dom && ret_dom != world().sigma()) {
-                        ret_type = convert(ret_dom);
-                    } else {
-                        ret_type = "void";
-                    }
-                } else {
-                    ret_type = "void";
-                }
-                
-                // Parameters are all elements except the last (continuation)
-                // Skip unit (world().sigma()) - it becomes no parameters
-                for (size_t i = 0; i < sigma->num_ops() - 1; ++i) {
-                    auto dom = sigma->op(i);
-                    if (!Axm::isa<mem::M>(dom) && dom != world().sigma()) {
-                        param_doms.push_back(dom);
-                    }
-                }
-            } else {
-                ret_type = "void";
-            }
-        } else {
-            ret_type = "void";
-        }
-    } else if (Pi::isa_returning(pi)) {
-        // Returning function: extract from ret_pi
-        ret_type = convert_fn_ret(pi);
-        auto doms = lam->doms();
-        auto view = doms.view();
-        // Avoid UB on empty domains.
-        if (!doms.empty()) view = view.rsubspan(1);
-        for (auto dom : view) {
-            if (!Axm::isa<mem::M>(dom) && dom != world().sigma()) {
-                param_doms.push_back(dom);
-            }
-        }
-    } else {
-        // Direct-style function (shouldn't happen at this stage, but handle it)
-        ret_type = convert_fn_ret(pi);
-        auto doms = lam->doms();
-        for (auto dom : doms.view()) {
-            if (!Axm::isa<mem::M>(dom) && dom != world().sigma()) {
-                param_doms.push_back(dom);
-            }
-        }
-    }
-    
-    if (ret_type.empty()) ret_type = "void";
-    
-    print(func_decls_, "declare {} {}(", ret_type, id(lam));
-    
-    for (auto sep = ""; auto dom : param_doms) {
+    std::string sym = id(lam);
+    if (declared_externs_.contains(sym)) return;
+    declared_externs_.insert(sym);
+
+    print(func_decls_, "declare {} {}(", convert_ret_pi(lam->type()->ret_pi()), sym);
+
+    auto doms = lam->doms();
+    const Pi* ret_pi = lam->type()->ret_pi();
+    for (auto sep = ""; auto dom : doms.view().rsubspan(1)) {
+        if (Axm::isa<mem::M>(dom)) continue;
+        if (dom == world().sigma()) continue;  // unit – not an LLVM arg
+        if (ret_pi && dom == ret_pi) continue;  // CPS continuation – not an LLVM arg
         print(func_decls_, "{}{}", sep, convert(dom));
         sep = ", ";
     }
-    
+
     print(func_decls_, ")\n");
 }
 
 std::string Emitter::prepare() {
-    print(func_impls_, "define {} {}(", convert_fn_ret(root()->type()), id(root()));
+    print(func_impls_, "define {} {}(", convert_ret_pi(root()->type()->ret_pi()), id(root()));
 
     auto vars = root()->vars();
-    auto view = vars.view();
-    if (Pi::isa_returning(root()->type())) {
-        if (!vars.empty()) view = view.rsubspan(1);
-    }
-    for (auto sep = ""; auto var : view) {
+    for (auto sep = ""; auto var : vars.view().rsubspan(1)) {
         if (Axm::isa<mem::M>(var->type())) continue;
         auto name    = id(var);
         locals_[var] = name;
@@ -422,21 +307,6 @@ void Emitter::finalize() {
         if (auto lam = mut->isa_mut<Lam>()) {
             assert(lam2bb_.contains(lam));
             auto& bb = lam2bb_[lam];
-
-            auto last_nonempty_line = [&]() -> std::string {
-                for (auto part_it = bb.parts.rbegin(); part_it != bb.parts.rend(); ++part_it) {
-                    for (auto line_it = part_it->rbegin(); line_it != part_it->rend(); ++line_it) {
-                        auto s = line_it->str();
-                        if (!s.empty()) return s;
-                    }
-                }
-                return {};
-            };
-
-            auto last = last_nonempty_line();
-
-            if (last.empty() || !is_terminator(last)) bb.tail("unreachable");
-
             print(func_impls_, "{}:\n", lam->unique_name());
 
             ++tab;
@@ -510,7 +380,7 @@ void Emitter::emit_epilogue(Lam* lam) {
             print(bb.tail().back(), "{} {}, label {} ", t_index, std::to_string(i), bbs[i]);
         print(bb.tail().back(), "]");
     } else if (app->callee()->isa<Bot>()) {
-        return bb.tail("unreachable");
+        return bb.tail("ret ; bottom: unreachable");
     } else if (auto callee = Lam::isa_mut_basicblock(app->callee())) { // ordinary jump
         size_t n = callee->num_tvars();
         for (size_t i = 0; i != n; ++i) {
@@ -536,13 +406,12 @@ void Emitter::emit_epilogue(Lam* lam) {
 
         std::vector<std::string> args;
         auto app_args = app->args();
-        // Skip the last argument (continuation) and filter out unit/mem arguments
+        const Pi* callee_ret_pi = app->callee_type()->ret_pi();
         for (auto arg : app_args.view().rsubspan(1)) {
             if (Axm::isa<mem::M>(arg->type())) continue;
-            if (arg->type() == world().sigma()) continue; // Skip unit
-            if (auto v_arg = emit_unsafe(arg); !v_arg.empty()) {
-                args.emplace_back(convert(arg->type()) + " " + v_arg);
-            }
+            if (arg->type() == world().sigma()) continue;  // unit – not an LLVM arg
+            if (callee_ret_pi && arg->type() == callee_ret_pi) continue;  // CPS continuation – not an LLVM arg
+            if (auto v_arg = emit_unsafe(arg); !v_arg.empty()) args.emplace_back(convert(arg->type()) + " " + v_arg);
         }
 
         if (app->args().back()->isa<Bot>()) {
@@ -592,19 +461,6 @@ void Emitter::emit_epilogue(Lam* lam) {
 }
 
 std::string Emitter::emit_bb(BB& bb, const Def* def) {
-    if (!def) error("emit_bb(nullptr)");
-
-    auto [it, inserted] = in_emit_bb_.insert(def);
-    struct Guard {
-        std::unordered_set<const Def*>& s;
-        const Def* d;
-        bool active;
-        ~Guard() {
-            if (active) s.erase(d);
-        }
-    } guard{in_emit_bb_, def, inserted};
-    if (!inserted) return "undef";
-
     if (auto lam = def->isa<Lam>()) return id(lam);
 
     auto name = id(def);
@@ -652,8 +508,7 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
     if (def->isa<Var>()) {
         auto ts = def->type()->projs();
         if (std::ranges::any_of(ts, [](auto t) { return Axm::isa<mem::M>(t); })) return {};
-        if (auto it = locals_.find(def); it != locals_.end()) return it->second;
-        return id(def);
+        return emit_tuple(def);
     }
 
     auto emit_gep_index = [&](const Def* index) {
@@ -791,12 +646,9 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
         return bb.assign(name, "{} i64 {}, {}", op, a, b);
     } else if (auto idx = Axm::isa<core::idx>(def)) {
         auto x = emit(idx->arg());
+        auto s = *Idx::size2bitwidth(Idx::isa(idx->type()));
         auto t = convert(idx->type());
-        if (auto size = Idx::isa(idx->type())) {
-            if (auto w = Idx::size2bitwidth(size)) {
-                if (*w < 64) return bb.assign(name, "trunc i64 {} to {}", x, t);
-            }
-        }
+        if (s < 64) return bb.assign(name, "trunc i64 {} to {}", x, t);
         return x;
     } else if (auto bit1 = Axm::isa<core::bit1>(def)) {
         assert(bit1.id() == core::bit1::neg);
@@ -914,20 +766,14 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
         auto t_src = convert(conv->arg()->type());
         auto t_dst = convert(conv->type());
 
-        auto src_size = Idx::isa(conv->arg()->type());
-        auto dst_size = Idx::isa(conv->type());
-        auto w_src    = src_size ? Idx::size2bitwidth(src_size) : std::optional<nat_t>{};
-        auto w_dst    = dst_size ? Idx::size2bitwidth(dst_size) : std::optional<nat_t>{};
+        nat_t w_src = *Idx::size2bitwidth(Idx::isa(conv->arg()->type()));
+        nat_t w_dst = *Idx::size2bitwidth(Idx::isa(conv->type()));
 
-        // If widths are unknown (dependent Idx), we cannot safely emit trunc/zext/sext.
-        // With your current "Idx -> i64" erasure in convert(), returning v_src is consistent.
-        if (!w_src || !w_dst) return v_src;
-
-        if (*w_src == *w_dst) return v_src;
+        if (w_src == w_dst) return v_src;
 
         switch (conv.id()) {
-            case core::conv::s: op = *w_src < *w_dst ? "sext" : "trunc"; break;
-            case core::conv::u: op = *w_src < *w_dst ? "zext" : "trunc"; break;
+            case core::conv::s: op = w_src < w_dst ? "sext" : "trunc"; break;
+            case core::conv::u: op = w_src < w_dst ? "zext" : "trunc"; break;
         }
 
         return bb.assign(name, "{} {} {} to {}", op, t_src, v_src, t_dst);
@@ -947,10 +793,7 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
 
         auto size2width = [&](const Def* type) {
             if (type->isa<Nat>()) return 64_n;
-            if (auto size = Idx::isa(type)) {
-                if (auto w = Idx::size2bitwidth(size)) return *w;
-                return 0_n; // unknown / dependent width
-            }
+            if (auto size = Idx::isa(type)) return *Idx::size2bitwidth(size);
             return 0_n;
         };
 
@@ -1216,17 +1059,6 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
         declare("{} @{}({})", t, f, t);
         return bb.assign(name, "tail call {} @{}({} {})", t, f, t, a);
     }
-
-    // If a polymorphic/dependent axiom (e.g. %core.wrap.add) survives as a *value*,
-    // LLVM can't represent its true type. We erase dependent Pi to i8* in convert(),
-    // and here we materialize a unique tag address for identity.
-    if (auto axm = def->isa<Axm>(); axm && def->type()->isa<Pi>()) {
-        auto tag = "@mim.tag." + axm->sym().str();
-        // Address of a unique external global is a stable i8* token.
-        decls_.emplace(tag + " = external global i8");
-        return tag; // type is i8*
-    }
-
     error("unhandled def in LLVM backend: {} : {}", def, def->type());
 }
 
