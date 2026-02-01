@@ -2,4 +2,4 @@ import core;
 import compile;
 
 axm %aie2p.get_coreid: [] -> I32;
-axm %aie2p.lower_pass: %compile.Pass;
+axm %aie2p.lower_aie2p_phase: %compile.Phase;
