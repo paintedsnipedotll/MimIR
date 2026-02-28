@@ -127,7 +127,6 @@ private:
     std::string convert_ret_pi(const Pi*);
 
     absl::btree_set<std::string> decls_;
-    absl::btree_set<std::string> declared_externs_;
     std::ostringstream type_decls_;
     std::ostringstream vars_decls_;
     std::ostringstream func_decls_;
@@ -250,32 +249,13 @@ void Emitter::start() {
 
 void Emitter::emit_imported(Lam* lam) {
     // TODO merge with declare method
-    std::string sym = id(lam);
-    if (declared_externs_.contains(sym)) return;
-    declared_externs_.insert(sym);
+    print(func_decls_, "declare {} {}(", convert_ret_pi(lam->type()->ret_pi()), id(lam));
 
-    print(func_decls_, "declare {} {}(", convert_ret_pi(lam->type()->ret_pi()), sym);
-
-    auto doms       = lam->doms();
-    const Pi* ret_pi = lam->type()->ret_pi();
-    bool is_llvm    = (sym.find("llvm.") != std::string::npos);
+    auto doms = lam->doms();
     for (auto sep = ""; auto dom : doms.view().rsubspan(1)) {
         if (Axm::isa<mem::M>(dom)) continue;
-        if (dom == world().sigma()) continue;  // unit – not an LLVM arg
-        if (ret_pi && dom == ret_pi) continue;  // CPS continuation – not an LLVM arg
-        if (is_llvm && dom->isa<Sigma>()) {
-            auto sigma = dom->as<Sigma>();
-            for (auto t : sigma->ops()) {
-                if (Axm::isa<mem::M>(t)) continue;
-                if (t == world().sigma()) continue;
-                if (ret_pi && t == ret_pi) continue;
-                print(func_decls_, "{}{}", sep, convert(t));
-                sep = ", ";
-            }
-        } else {
-            print(func_decls_, "{}{}", sep, convert(dom));
-            sep = ", ";
-        }
+        print(func_decls_, "{}{}", sep, convert(dom));
+        sep = ", ";
     }
 
     print(func_decls_, ")\n");
@@ -412,38 +392,8 @@ void Emitter::emit_epilogue(Lam* lam) {
 
         std::vector<std::string> args;
         auto app_args = app->args();
-        const Pi* callee_ret_pi = app->callee_type()->ret_pi();
-        bool expand_sigma_for_llvm =
-            (v_callee.starts_with("@llvm.") || v_callee.find("@llvm.") != std::string::npos);
-        for (auto arg : app_args.view().rsubspan(1)) {
-            if (Axm::isa<mem::M>(arg->type())) continue;
-            if (arg->type() == world().sigma()) continue;  // unit – not an LLVM arg
-            if (callee_ret_pi && arg->type() == callee_ret_pi) continue;  // CPS continuation – not an LLVM arg
-
-            if (expand_sigma_for_llvm) {
-                if (auto tuple = arg->isa<Tuple>()) {
-                    if (auto sigma = tuple->type()->isa<Sigma>()) {
-                        bool has_mem = false;
-                        for (auto t : sigma->ops())
-                            if (Axm::isa<mem::M>(t)) {
-                                has_mem = true;
-                                break;
-                            }
-                        if (!has_mem && sigma->num_projs() >= 2) {
-                            for (size_t i = 0, n = tuple->num_projs(); i != n; ++i) {
-                                auto e = tuple->proj(n, i);
-                                if (Axm::isa<mem::M>(e->type())) continue;
-                                if (auto v = emit_unsafe(e); !v.empty())
-                                    args.emplace_back(convert(e->type()) + " " + v);
-                            }
-                            continue;
-                        }
-                    }
-                }
-            }
-
+        for (auto arg : app_args.view().rsubspan(1))
             if (auto v_arg = emit_unsafe(arg); !v_arg.empty()) args.emplace_back(convert(arg->type()) + " " + v_arg);
-        }
 
         if (app->args().back()->isa<Bot>()) {
             // TODO: Perhaps it'd be better to simply η-wrap this prior to the BE...
