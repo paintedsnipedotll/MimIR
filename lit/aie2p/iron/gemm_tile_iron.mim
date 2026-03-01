@@ -21,13 +21,13 @@ lam extern _compile (): %compile.Phase =
 
 let K_nat = ⊤:Nat;
 
+// IRON-compatible kernel: 3 pointer args, no scalars.
+// Shift and round are hardcoded to 0 for IRON's Kernel() ABI.
 con extern gemm_tile [
     mem: %mem.M 0,
     A: %mem.Ptr («4; «32; I16»», 0),
     B: %mem.Ptr («4; «32; I16»», 0),
     C_out: %mem.Ptr («16; I32», 0),
-    shift: I32,
-    round: I32,
     return: Cn [%mem.M 0]
 ] =
     let zero_acc = ‹16; 0:I64›;
@@ -45,7 +45,7 @@ con extern gemm_tile [
             continue (mem, new_acc);
 
         con k_exit [mem: %mem.M 0, acc: «16; I64»] =
-            let result = %aie2p.srs_i32_16 (acc, shift, round);
+            let result = %aie2p.srs_i32_16 (acc, 0I32, 0I32);
             let mem = %mem.store (mem, C_out, result);
             return (mem);
     end;

@@ -19,6 +19,7 @@ private:
     const Def* llvm_srs_i16_32_wrapped_ = nullptr;
     const Def* llvm_mac_i16_i64_wrapped_ = nullptr;
     const Def* llvm_srs_i32_16_wrapped_ = nullptr;
+    const Def* llvm_mac_4x4x8_wrapped_ = nullptr;
 };
 
 } // namespace mim::plug::aie2p::phase
