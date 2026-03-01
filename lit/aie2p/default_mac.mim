@@ -1,0 +1,10 @@
+import core;
+import compile;
+import opt;
+plugin aie2p;
+import aie2p;
+
+con extern mac_test(a: «32; I16», b: «32; I16», acc: «16; I64», conf: I32,
+                    return: Cn [«16; I64»]) =
+    let result = %aie2p.mac_i16_i64 (a, b, acc, conf);
+    return (result);

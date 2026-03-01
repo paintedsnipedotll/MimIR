@@ -15,7 +15,7 @@ lam extern _compile (): %compile.Phase =
         %compile.ret_wrap_phase
     );
 
-con extern srs_test(acc: «32; I64», shift: I32, round: I32,
-                   return: Cn [«32; I16»]) =
-    let result = %aie2p.srs_i16_32 (acc, shift, round);
+con extern mac_test(a: «32; I16», b: «32; I16», acc: «16; I64», conf: I32,
+                    return: Cn [«16; I64»]) =
+    let result = %aie2p.mac_i16_i64 (a, b, acc, conf);
     return (result);

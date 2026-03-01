@@ -3,10 +3,8 @@ import compile;
 import opt;
 plugin aie2p;
 import aie2p;
-plugin mem;
-import mem;
 
-con extern srs_test(acc: %mem.Vec (32, I64), shift: I32, round: I32,
-                   return: Cn [%mem.Vec (32, I16)]) =
+con extern srs_test(acc: «32; I64», shift: I32, round: I32,
+                   return: Cn [«32; I16»]) =
     let result = %aie2p.srs_i16_32 (acc, shift, round);
     return (result);
