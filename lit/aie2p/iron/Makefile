@@ -50,8 +50,6 @@ build/gemm_tile_matmul.ll: gemm_tile_matmul.mim | build
 
 build/gemm_tile_matmul.o: build/gemm_tile_matmul.ll | check-peano
 	$(PEANO_DIR)/bin/llc $< --mtriple=aie2p-none-unknown-elf -o $@ -filetype=obj
-	# Rename symbol to match IRON kernel name
-	$(PEANO_DIR)/bin/llvm-objcopy --redefine-sym gemm_tile=gemm_tile $@
 
 build/design_matmul.mlir: design_matmul.py | build
 	python3 $< > $@

@@ -118,12 +118,13 @@ def main():
     print(f"Output C[0:32]: {result}")
 
     # Compute reference: 4x4x8 matmul with all-ones
-    # With all-ones A (i16) and all-ones B (i16):
-    # Each output element C[i][j] = sum_{k_inner=0}^{7} A[i][k_inner] * B[k_inner][j]
-    # For a single mac_4x4x8 with all-ones: C[i][j] = 8 (sum of 8 products of 1*1)
-    # Over K=4 iterations: C[i][j] = 4 * 8 = 32
-    # Output is 4x8 = 32 i16 values, all should be 32.
-    expected = np.full(C_ELEMS, K * 8, dtype=np.int16)
+    # mac_4x4x8 = M=4, K_inner=4, N=8 (4x4 * 4x8 = 4x8)
+    # C[i][j] = sum_{k=0}^{3} A[i][k] * B[k][j]
+    # For a single mac_4x4x8 with all-ones: C[i][j] = 4 (inner dim K_inner=4)
+    # Over K=4 outer iterations: C[i][j] = 4 * 4 = 16
+    # Output is 4x8 = 32 i16 values.
+    K_inner = 4  # matmul inner dimension
+    expected = np.full(C_ELEMS, K * K_inner, dtype=np.int16)
 
     print(f"Expected:       {expected}")
     if np.array_equal(result, expected):
