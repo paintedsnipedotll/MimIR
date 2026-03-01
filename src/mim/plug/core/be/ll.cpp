@@ -887,15 +887,28 @@ std::string Emitter::emit_bb(BB& bb, const Def* def) {
         emit_unsafe(load->arg(0));
         auto v_ptr     = emit(load->arg(1));
         auto t_ptr     = convert(load->arg(1)->type());
-        auto t_pointee = convert(Axm::as<mem::Ptr>(load->arg(1)->type())->arg(0));
+        auto pointee   = Axm::as<mem::Ptr>(load->arg(1)->type())->arg(0);
+        auto t_pointee = convert(pointee);
+        if (is_simd(pointee)) {
+            auto t_vec_ptr = t_pointee + "*";
+            bb.assign(name + ".vp", "bitcast {} {} to {}", t_ptr, v_ptr, t_vec_ptr);
+            return bb.assign(name, "load {}, {} {}", t_pointee, t_vec_ptr, name + ".vp");
+        }
         return bb.assign(name, "load {}, {} {}", t_pointee, t_ptr, v_ptr);
     } else if (auto store = Axm::isa<mem::store>(def)) {
         emit_unsafe(store->arg(0));
-        auto v_ptr = emit(store->arg(1));
-        auto v_val = emit(store->arg(2));
-        auto t_ptr = convert(store->arg(1)->type());
-        auto t_val = convert(store->arg(2)->type());
-        print(bb.body().emplace_back(), "store {} {}, {} {}", t_val, v_val, t_ptr, v_ptr);
+        auto v_ptr   = emit(store->arg(1));
+        auto v_val   = emit(store->arg(2));
+        auto t_ptr   = convert(store->arg(1)->type());
+        auto t_val   = convert(store->arg(2)->type());
+        auto pointee = Axm::as<mem::Ptr>(store->arg(1)->type())->arg(0);
+        if (is_simd(pointee)) {
+            auto t_vec_ptr = t_val + "*";
+            bb.assign(name + ".vp", "bitcast {} {} to {}", t_ptr, v_ptr, t_vec_ptr);
+            print(bb.body().emplace_back(), "store {} {}, {} {}", t_val, v_val, t_vec_ptr, name + ".vp");
+        } else {
+            print(bb.body().emplace_back(), "store {} {}, {} {}", t_val, v_val, t_ptr, v_ptr);
+        }
         return {};
     } else if (auto q = Axm::isa<clos::alloc_jmpbuf>(def)) {
         declare("i64 @jmpbuf_size()");
