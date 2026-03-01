@@ -15,11 +15,13 @@
 MIMIR_BUILD ?= ../../../build
 PEANO_DIR   ?= $(shell python3 -c "import llvm_aie; print(llvm_aie.get_install_dir())" 2>/dev/null)
 
-.PHONY: all matmul clean check-peano
+.PHONY: all matmul tiled clean check-peano
 
 all: build/final.xclbin
 
 matmul: build/final_matmul.xclbin
+
+tiled: build/final_32x32x32.xclbin
 
 # === Element-wise MAC kernel (existing) ===
 
@@ -61,6 +63,25 @@ build/final_matmul.xclbin: build/design_matmul.mlir build/gemm_tile_matmul.o
 		--no-xchesscc --no-xbridge --peano $(PEANO_DIR) \
 		--aie-generate-npu-insts --npu-insts-name=insts_matmul.txt \
 		design_matmul.mlir
+
+# === 32x32x32 tiled matmul ===
+
+build/gemm_tile_32x32x32.ll: gemm_tile_32x32x32.mim | build
+	$(MIMIR_BUILD)/bin/mim $< --output-ll $@
+
+build/gemm_tile_32x32x32.o: build/gemm_tile_32x32x32.ll | check-peano
+	$(PEANO_DIR)/bin/llc $< --mtriple=aie2p-none-unknown-elf -o $@ -filetype=obj
+
+build/design_32x32x32.mlir: design_32x32x32.py | build
+	python3 $< > $@
+
+build/final_32x32x32.xclbin: build/design_32x32x32.mlir build/gemm_tile_32x32x32.o
+	cd build && cp gemm_tile_32x32x32.o gemm_tile.o && \
+	aiecc.py --alloc-scheme=basic-sequential \
+		--aie-generate-xclbin --no-compile-host --xclbin-name=final_32x32x32.xclbin \
+		--no-xchesscc --no-xbridge --peano $(PEANO_DIR) \
+		--aie-generate-npu-insts --npu-insts-name=insts_32x32x32.txt \
+		design_32x32x32.mlir
 
 build:
 	mkdir -p build

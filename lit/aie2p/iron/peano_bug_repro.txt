@@ -1,0 +1,885 @@
+; Minimal reproducer for Peano (llvm-aie) bug:
+; A phi node carrying a large struct {i32, 128 x i64} with zeroinitializer
+; as the entry value fails to properly zero the ACC2048 hardware registers
+; on AIE2P. This causes alternating correct/incorrect results across kernel
+; invocations.
+;
+; The struct packs: [0]=k counter, [1..32]=acc00, [33..64]=acc01,
+;                   [65..96]=acc10, [97..128]=acc11
+;
+; Compile with:
+;   llc peano_bug_repro.ll --mtriple=aie2p-none-unknown-elf -O2 --filetype=obj -o /dev/null
+;
+; Working version: {i32, 32 x i64} (1 accumulator = 33 fields) works correctly.
+; Buggy version:   {i32, 128 x i64} (4 accumulators = 129 fields) does NOT zero correctly.
+
+declare <32 x i64> @llvm.aie2p.I512.I512.ACC2048.mac.conf(<16 x i32>, <32 x i16>, <32 x i64>, i32)
+declare <32 x i16> @llvm.aie2p.I512.v32.acc64.srs(<32 x i64>, i32, i32)
+
+; The 129-field struct type: {i32, i64 x 128}
+%acc_state = type { i32, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64 }
+
+define void @repro(
+  <16 x i32> %A0,   ; tile row 0 (bitcast of 32 x i16)
+  <16 x i32> %A1,   ; tile row 1
+  <32 x i16> %B0,   ; tile col 0
+  <32 x i16> %B1,   ; tile col 1
+  <32 x i16>* %out0, ; output tile (0,0)
+  <32 x i16>* %out1, ; output tile (0,1)
+  <32 x i16>* %out2, ; output tile (1,0)
+  <32 x i16>* %out3  ; output tile (1,1)
+) {
+entry:
+  ; --- BUG: zeroinitializer on this 129-field struct ---
+  ; Peano fails to properly zero the 4 ACC2048 registers packed inside.
+  br label %k_loop
+
+k_loop:
+  ; Phi selects zeroinitializer on entry, updated struct on backedge
+  %state = phi %acc_state [ zeroinitializer, %entry ], [ %state_next, %k_continue ]
+
+  ; Extract loop counter
+  %k = extractvalue %acc_state %state, 0
+  %done = icmp uge i32 %k, 8
+  br i1 %done, label %k_exit, label %k_body
+
+k_body:
+  ; --- Extract acc00 (fields 1..32) into <32 x i64> ---
+  %a00.0  = extractvalue %acc_state %state, 1
+  %a00.1  = extractvalue %acc_state %state, 2
+  %a00.2  = extractvalue %acc_state %state, 3
+  %a00.3  = extractvalue %acc_state %state, 4
+  %a00.4  = extractvalue %acc_state %state, 5
+  %a00.5  = extractvalue %acc_state %state, 6
+  %a00.6  = extractvalue %acc_state %state, 7
+  %a00.7  = extractvalue %acc_state %state, 8
+  %a00.8  = extractvalue %acc_state %state, 9
+  %a00.9  = extractvalue %acc_state %state, 10
+  %a00.10 = extractvalue %acc_state %state, 11
+  %a00.11 = extractvalue %acc_state %state, 12
+  %a00.12 = extractvalue %acc_state %state, 13
+  %a00.13 = extractvalue %acc_state %state, 14
+  %a00.14 = extractvalue %acc_state %state, 15
+  %a00.15 = extractvalue %acc_state %state, 16
+  %a00.16 = extractvalue %acc_state %state, 17
+  %a00.17 = extractvalue %acc_state %state, 18
+  %a00.18 = extractvalue %acc_state %state, 19
+  %a00.19 = extractvalue %acc_state %state, 20
+  %a00.20 = extractvalue %acc_state %state, 21
+  %a00.21 = extractvalue %acc_state %state, 22
+  %a00.22 = extractvalue %acc_state %state, 23
+  %a00.23 = extractvalue %acc_state %state, 24
+  %a00.24 = extractvalue %acc_state %state, 25
+  %a00.25 = extractvalue %acc_state %state, 26
+  %a00.26 = extractvalue %acc_state %state, 27
+  %a00.27 = extractvalue %acc_state %state, 28
+  %a00.28 = extractvalue %acc_state %state, 29
+  %a00.29 = extractvalue %acc_state %state, 30
+  %a00.30 = extractvalue %acc_state %state, 31
+  %a00.31 = extractvalue %acc_state %state, 32
+
+  %vec00.0  = insertelement <32 x i64> undef, i64 %a00.0,  i32 0
+  %vec00.1  = insertelement <32 x i64> %vec00.0,  i64 %a00.1,  i32 1
+  %vec00.2  = insertelement <32 x i64> %vec00.1,  i64 %a00.2,  i32 2
+  %vec00.3  = insertelement <32 x i64> %vec00.2,  i64 %a00.3,  i32 3
+  %vec00.4  = insertelement <32 x i64> %vec00.3,  i64 %a00.4,  i32 4
+  %vec00.5  = insertelement <32 x i64> %vec00.4,  i64 %a00.5,  i32 5
+  %vec00.6  = insertelement <32 x i64> %vec00.5,  i64 %a00.6,  i32 6
+  %vec00.7  = insertelement <32 x i64> %vec00.6,  i64 %a00.7,  i32 7
+  %vec00.8  = insertelement <32 x i64> %vec00.7,  i64 %a00.8,  i32 8
+  %vec00.9  = insertelement <32 x i64> %vec00.8,  i64 %a00.9,  i32 9
+  %vec00.10 = insertelement <32 x i64> %vec00.9,  i64 %a00.10, i32 10
+  %vec00.11 = insertelement <32 x i64> %vec00.10, i64 %a00.11, i32 11
+  %vec00.12 = insertelement <32 x i64> %vec00.11, i64 %a00.12, i32 12
+  %vec00.13 = insertelement <32 x i64> %vec00.12, i64 %a00.13, i32 13
+  %vec00.14 = insertelement <32 x i64> %vec00.13, i64 %a00.14, i32 14
+  %vec00.15 = insertelement <32 x i64> %vec00.14, i64 %a00.15, i32 15
+  %vec00.16 = insertelement <32 x i64> %vec00.15, i64 %a00.16, i32 16
+  %vec00.17 = insertelement <32 x i64> %vec00.16, i64 %a00.17, i32 17
+  %vec00.18 = insertelement <32 x i64> %vec00.17, i64 %a00.18, i32 18
+  %vec00.19 = insertelement <32 x i64> %vec00.18, i64 %a00.19, i32 19
+  %vec00.20 = insertelement <32 x i64> %vec00.19, i64 %a00.20, i32 20
+  %vec00.21 = insertelement <32 x i64> %vec00.20, i64 %a00.21, i32 21
+  %vec00.22 = insertelement <32 x i64> %vec00.21, i64 %a00.22, i32 22
+  %vec00.23 = insertelement <32 x i64> %vec00.22, i64 %a00.23, i32 23
+  %vec00.24 = insertelement <32 x i64> %vec00.23, i64 %a00.24, i32 24
+  %vec00.25 = insertelement <32 x i64> %vec00.24, i64 %a00.25, i32 25
+  %vec00.26 = insertelement <32 x i64> %vec00.25, i64 %a00.26, i32 26
+  %vec00.27 = insertelement <32 x i64> %vec00.26, i64 %a00.27, i32 27
+  %vec00.28 = insertelement <32 x i64> %vec00.27, i64 %a00.28, i32 28
+  %vec00.29 = insertelement <32 x i64> %vec00.28, i64 %a00.29, i32 29
+  %vec00.30 = insertelement <32 x i64> %vec00.29, i64 %a00.30, i32 30
+  %vec00.31 = insertelement <32 x i64> %vec00.30, i64 %a00.31, i32 31
+
+  ; --- Extract acc01 (fields 33..64) into <32 x i64> ---
+  %a01.0  = extractvalue %acc_state %state, 33
+  %a01.1  = extractvalue %acc_state %state, 34
+  %a01.2  = extractvalue %acc_state %state, 35
+  %a01.3  = extractvalue %acc_state %state, 36
+  %a01.4  = extractvalue %acc_state %state, 37
+  %a01.5  = extractvalue %acc_state %state, 38
+  %a01.6  = extractvalue %acc_state %state, 39
+  %a01.7  = extractvalue %acc_state %state, 40
+  %a01.8  = extractvalue %acc_state %state, 41
+  %a01.9  = extractvalue %acc_state %state, 42
+  %a01.10 = extractvalue %acc_state %state, 43
+  %a01.11 = extractvalue %acc_state %state, 44
+  %a01.12 = extractvalue %acc_state %state, 45
+  %a01.13 = extractvalue %acc_state %state, 46
+  %a01.14 = extractvalue %acc_state %state, 47
+  %a01.15 = extractvalue %acc_state %state, 48
+  %a01.16 = extractvalue %acc_state %state, 49
+  %a01.17 = extractvalue %acc_state %state, 50
+  %a01.18 = extractvalue %acc_state %state, 51
+  %a01.19 = extractvalue %acc_state %state, 52
+  %a01.20 = extractvalue %acc_state %state, 53
+  %a01.21 = extractvalue %acc_state %state, 54
+  %a01.22 = extractvalue %acc_state %state, 55
+  %a01.23 = extractvalue %acc_state %state, 56
+  %a01.24 = extractvalue %acc_state %state, 57
+  %a01.25 = extractvalue %acc_state %state, 58
+  %a01.26 = extractvalue %acc_state %state, 59
+  %a01.27 = extractvalue %acc_state %state, 60
+  %a01.28 = extractvalue %acc_state %state, 61
+  %a01.29 = extractvalue %acc_state %state, 62
+  %a01.30 = extractvalue %acc_state %state, 63
+  %a01.31 = extractvalue %acc_state %state, 64
+
+  %vec01.0  = insertelement <32 x i64> undef, i64 %a01.0,  i32 0
+  %vec01.1  = insertelement <32 x i64> %vec01.0,  i64 %a01.1,  i32 1
+  %vec01.2  = insertelement <32 x i64> %vec01.1,  i64 %a01.2,  i32 2
+  %vec01.3  = insertelement <32 x i64> %vec01.2,  i64 %a01.3,  i32 3
+  %vec01.4  = insertelement <32 x i64> %vec01.3,  i64 %a01.4,  i32 4
+  %vec01.5  = insertelement <32 x i64> %vec01.4,  i64 %a01.5,  i32 5
+  %vec01.6  = insertelement <32 x i64> %vec01.5,  i64 %a01.6,  i32 6
+  %vec01.7  = insertelement <32 x i64> %vec01.6,  i64 %a01.7,  i32 7
+  %vec01.8  = insertelement <32 x i64> %vec01.7,  i64 %a01.8,  i32 8
+  %vec01.9  = insertelement <32 x i64> %vec01.8,  i64 %a01.9,  i32 9
+  %vec01.10 = insertelement <32 x i64> %vec01.9,  i64 %a01.10, i32 10
+  %vec01.11 = insertelement <32 x i64> %vec01.10, i64 %a01.11, i32 11
+  %vec01.12 = insertelement <32 x i64> %vec01.11, i64 %a01.12, i32 12
+  %vec01.13 = insertelement <32 x i64> %vec01.12, i64 %a01.13, i32 13
+  %vec01.14 = insertelement <32 x i64> %vec01.13, i64 %a01.14, i32 14
+  %vec01.15 = insertelement <32 x i64> %vec01.14, i64 %a01.15, i32 15
+  %vec01.16 = insertelement <32 x i64> %vec01.15, i64 %a01.16, i32 16
+  %vec01.17 = insertelement <32 x i64> %vec01.16, i64 %a01.17, i32 17
+  %vec01.18 = insertelement <32 x i64> %vec01.17, i64 %a01.18, i32 18
+  %vec01.19 = insertelement <32 x i64> %vec01.18, i64 %a01.19, i32 19
+  %vec01.20 = insertelement <32 x i64> %vec01.19, i64 %a01.20, i32 20
+  %vec01.21 = insertelement <32 x i64> %vec01.20, i64 %a01.21, i32 21
+  %vec01.22 = insertelement <32 x i64> %vec01.21, i64 %a01.22, i32 22
+  %vec01.23 = insertelement <32 x i64> %vec01.22, i64 %a01.23, i32 23
+  %vec01.24 = insertelement <32 x i64> %vec01.23, i64 %a01.24, i32 24
+  %vec01.25 = insertelement <32 x i64> %vec01.24, i64 %a01.25, i32 25
+  %vec01.26 = insertelement <32 x i64> %vec01.25, i64 %a01.26, i32 26
+  %vec01.27 = insertelement <32 x i64> %vec01.26, i64 %a01.27, i32 27
+  %vec01.28 = insertelement <32 x i64> %vec01.27, i64 %a01.28, i32 28
+  %vec01.29 = insertelement <32 x i64> %vec01.28, i64 %a01.29, i32 29
+  %vec01.30 = insertelement <32 x i64> %vec01.29, i64 %a01.30, i32 30
+  %vec01.31 = insertelement <32 x i64> %vec01.30, i64 %a01.31, i32 31
+
+  ; --- Extract acc10 (fields 65..96) into <32 x i64> ---
+  %a10.0  = extractvalue %acc_state %state, 65
+  %a10.1  = extractvalue %acc_state %state, 66
+  %a10.2  = extractvalue %acc_state %state, 67
+  %a10.3  = extractvalue %acc_state %state, 68
+  %a10.4  = extractvalue %acc_state %state, 69
+  %a10.5  = extractvalue %acc_state %state, 70
+  %a10.6  = extractvalue %acc_state %state, 71
+  %a10.7  = extractvalue %acc_state %state, 72
+  %a10.8  = extractvalue %acc_state %state, 73
+  %a10.9  = extractvalue %acc_state %state, 74
+  %a10.10 = extractvalue %acc_state %state, 75
+  %a10.11 = extractvalue %acc_state %state, 76
+  %a10.12 = extractvalue %acc_state %state, 77
+  %a10.13 = extractvalue %acc_state %state, 78
+  %a10.14 = extractvalue %acc_state %state, 79
+  %a10.15 = extractvalue %acc_state %state, 80
+  %a10.16 = extractvalue %acc_state %state, 81
+  %a10.17 = extractvalue %acc_state %state, 82
+  %a10.18 = extractvalue %acc_state %state, 83
+  %a10.19 = extractvalue %acc_state %state, 84
+  %a10.20 = extractvalue %acc_state %state, 85
+  %a10.21 = extractvalue %acc_state %state, 86
+  %a10.22 = extractvalue %acc_state %state, 87
+  %a10.23 = extractvalue %acc_state %state, 88
+  %a10.24 = extractvalue %acc_state %state, 89
+  %a10.25 = extractvalue %acc_state %state, 90
+  %a10.26 = extractvalue %acc_state %state, 91
+  %a10.27 = extractvalue %acc_state %state, 92
+  %a10.28 = extractvalue %acc_state %state, 93
+  %a10.29 = extractvalue %acc_state %state, 94
+  %a10.30 = extractvalue %acc_state %state, 95
+  %a10.31 = extractvalue %acc_state %state, 96
+
+  %vec10.0  = insertelement <32 x i64> undef, i64 %a10.0,  i32 0
+  %vec10.1  = insertelement <32 x i64> %vec10.0,  i64 %a10.1,  i32 1
+  %vec10.2  = insertelement <32 x i64> %vec10.1,  i64 %a10.2,  i32 2
+  %vec10.3  = insertelement <32 x i64> %vec10.2,  i64 %a10.3,  i32 3
+  %vec10.4  = insertelement <32 x i64> %vec10.3,  i64 %a10.4,  i32 4
+  %vec10.5  = insertelement <32 x i64> %vec10.4,  i64 %a10.5,  i32 5
+  %vec10.6  = insertelement <32 x i64> %vec10.5,  i64 %a10.6,  i32 6
+  %vec10.7  = insertelement <32 x i64> %vec10.6,  i64 %a10.7,  i32 7
+  %vec10.8  = insertelement <32 x i64> %vec10.7,  i64 %a10.8,  i32 8
+  %vec10.9  = insertelement <32 x i64> %vec10.8,  i64 %a10.9,  i32 9
+  %vec10.10 = insertelement <32 x i64> %vec10.9,  i64 %a10.10, i32 10
+  %vec10.11 = insertelement <32 x i64> %vec10.10, i64 %a10.11, i32 11
+  %vec10.12 = insertelement <32 x i64> %vec10.11, i64 %a10.12, i32 12
+  %vec10.13 = insertelement <32 x i64> %vec10.12, i64 %a10.13, i32 13
+  %vec10.14 = insertelement <32 x i64> %vec10.13, i64 %a10.14, i32 14
+  %vec10.15 = insertelement <32 x i64> %vec10.14, i64 %a10.15, i32 15
+  %vec10.16 = insertelement <32 x i64> %vec10.15, i64 %a10.16, i32 16
+  %vec10.17 = insertelement <32 x i64> %vec10.16, i64 %a10.17, i32 17
+  %vec10.18 = insertelement <32 x i64> %vec10.17, i64 %a10.18, i32 18
+  %vec10.19 = insertelement <32 x i64> %vec10.18, i64 %a10.19, i32 19
+  %vec10.20 = insertelement <32 x i64> %vec10.19, i64 %a10.20, i32 20
+  %vec10.21 = insertelement <32 x i64> %vec10.20, i64 %a10.21, i32 21
+  %vec10.22 = insertelement <32 x i64> %vec10.21, i64 %a10.22, i32 22
+  %vec10.23 = insertelement <32 x i64> %vec10.22, i64 %a10.23, i32 23
+  %vec10.24 = insertelement <32 x i64> %vec10.23, i64 %a10.24, i32 24
+  %vec10.25 = insertelement <32 x i64> %vec10.24, i64 %a10.25, i32 25
+  %vec10.26 = insertelement <32 x i64> %vec10.25, i64 %a10.26, i32 26
+  %vec10.27 = insertelement <32 x i64> %vec10.26, i64 %a10.27, i32 27
+  %vec10.28 = insertelement <32 x i64> %vec10.27, i64 %a10.28, i32 28
+  %vec10.29 = insertelement <32 x i64> %vec10.28, i64 %a10.29, i32 29
+  %vec10.30 = insertelement <32 x i64> %vec10.29, i64 %a10.30, i32 30
+  %vec10.31 = insertelement <32 x i64> %vec10.30, i64 %a10.31, i32 31
+
+  ; --- Extract acc11 (fields 97..128) into <32 x i64> ---
+  %a11.0  = extractvalue %acc_state %state, 97
+  %a11.1  = extractvalue %acc_state %state, 98
+  %a11.2  = extractvalue %acc_state %state, 99
+  %a11.3  = extractvalue %acc_state %state, 100
+  %a11.4  = extractvalue %acc_state %state, 101
+  %a11.5  = extractvalue %acc_state %state, 102
+  %a11.6  = extractvalue %acc_state %state, 103
+  %a11.7  = extractvalue %acc_state %state, 104
+  %a11.8  = extractvalue %acc_state %state, 105
+  %a11.9  = extractvalue %acc_state %state, 106
+  %a11.10 = extractvalue %acc_state %state, 107
+  %a11.11 = extractvalue %acc_state %state, 108
+  %a11.12 = extractvalue %acc_state %state, 109
+  %a11.13 = extractvalue %acc_state %state, 110
+  %a11.14 = extractvalue %acc_state %state, 111
+  %a11.15 = extractvalue %acc_state %state, 112
+  %a11.16 = extractvalue %acc_state %state, 113
+  %a11.17 = extractvalue %acc_state %state, 114
+  %a11.18 = extractvalue %acc_state %state, 115
+  %a11.19 = extractvalue %acc_state %state, 116
+  %a11.20 = extractvalue %acc_state %state, 117
+  %a11.21 = extractvalue %acc_state %state, 118
+  %a11.22 = extractvalue %acc_state %state, 119
+  %a11.23 = extractvalue %acc_state %state, 120
+  %a11.24 = extractvalue %acc_state %state, 121
+  %a11.25 = extractvalue %acc_state %state, 122
+  %a11.26 = extractvalue %acc_state %state, 123
+  %a11.27 = extractvalue %acc_state %state, 124
+  %a11.28 = extractvalue %acc_state %state, 125
+  %a11.29 = extractvalue %acc_state %state, 126
+  %a11.30 = extractvalue %acc_state %state, 127
+  %a11.31 = extractvalue %acc_state %state, 128
+
+  %vec11.0  = insertelement <32 x i64> undef, i64 %a11.0,  i32 0
+  %vec11.1  = insertelement <32 x i64> %vec11.0,  i64 %a11.1,  i32 1
+  %vec11.2  = insertelement <32 x i64> %vec11.1,  i64 %a11.2,  i32 2
+  %vec11.3  = insertelement <32 x i64> %vec11.2,  i64 %a11.3,  i32 3
+  %vec11.4  = insertelement <32 x i64> %vec11.3,  i64 %a11.4,  i32 4
+  %vec11.5  = insertelement <32 x i64> %vec11.4,  i64 %a11.5,  i32 5
+  %vec11.6  = insertelement <32 x i64> %vec11.5,  i64 %a11.6,  i32 6
+  %vec11.7  = insertelement <32 x i64> %vec11.6,  i64 %a11.7,  i32 7
+  %vec11.8  = insertelement <32 x i64> %vec11.7,  i64 %a11.8,  i32 8
+  %vec11.9  = insertelement <32 x i64> %vec11.8,  i64 %a11.9,  i32 9
+  %vec11.10 = insertelement <32 x i64> %vec11.9,  i64 %a11.10, i32 10
+  %vec11.11 = insertelement <32 x i64> %vec11.10, i64 %a11.11, i32 11
+  %vec11.12 = insertelement <32 x i64> %vec11.11, i64 %a11.12, i32 12
+  %vec11.13 = insertelement <32 x i64> %vec11.12, i64 %a11.13, i32 13
+  %vec11.14 = insertelement <32 x i64> %vec11.13, i64 %a11.14, i32 14
+  %vec11.15 = insertelement <32 x i64> %vec11.14, i64 %a11.15, i32 15
+  %vec11.16 = insertelement <32 x i64> %vec11.15, i64 %a11.16, i32 16
+  %vec11.17 = insertelement <32 x i64> %vec11.16, i64 %a11.17, i32 17
+  %vec11.18 = insertelement <32 x i64> %vec11.17, i64 %a11.18, i32 18
+  %vec11.19 = insertelement <32 x i64> %vec11.18, i64 %a11.19, i32 19
+  %vec11.20 = insertelement <32 x i64> %vec11.19, i64 %a11.20, i32 20
+  %vec11.21 = insertelement <32 x i64> %vec11.20, i64 %a11.21, i32 21
+  %vec11.22 = insertelement <32 x i64> %vec11.21, i64 %a11.22, i32 22
+  %vec11.23 = insertelement <32 x i64> %vec11.22, i64 %a11.23, i32 23
+  %vec11.24 = insertelement <32 x i64> %vec11.23, i64 %a11.24, i32 24
+  %vec11.25 = insertelement <32 x i64> %vec11.24, i64 %a11.25, i32 25
+  %vec11.26 = insertelement <32 x i64> %vec11.25, i64 %a11.26, i32 26
+  %vec11.27 = insertelement <32 x i64> %vec11.26, i64 %a11.27, i32 27
+  %vec11.28 = insertelement <32 x i64> %vec11.27, i64 %a11.28, i32 28
+  %vec11.29 = insertelement <32 x i64> %vec11.28, i64 %a11.29, i32 29
+  %vec11.30 = insertelement <32 x i64> %vec11.29, i64 %a11.30, i32 30
+  %vec11.31 = insertelement <32 x i64> %vec11.30, i64 %a11.31, i32 31
+
+  ; --- 4 MAC calls: 2x2 tile = A0*B0, A0*B1, A1*B0, A1*B1 ---
+  ; conf=26 = unsigned mac_4x4_4x8
+  %mac00 = call <32 x i64> @llvm.aie2p.I512.I512.ACC2048.mac.conf(<16 x i32> %A0, <32 x i16> %B0, <32 x i64> %vec00.31, i32 26)
+  %mac01 = call <32 x i64> @llvm.aie2p.I512.I512.ACC2048.mac.conf(<16 x i32> %A0, <32 x i16> %B1, <32 x i64> %vec01.31, i32 26)
+  %mac10 = call <32 x i64> @llvm.aie2p.I512.I512.ACC2048.mac.conf(<16 x i32> %A1, <32 x i16> %B0, <32 x i64> %vec10.31, i32 26)
+  %mac11 = call <32 x i64> @llvm.aie2p.I512.I512.ACC2048.mac.conf(<16 x i32> %A1, <32 x i16> %B1, <32 x i64> %vec11.31, i32 26)
+
+  ; --- Repack MAC results into struct for backedge ---
+  %k_next = add nuw nsw i32 1, %k
+
+  ; Insert counter
+  %s.0 = insertvalue %acc_state undef, i32 %k_next, 0
+
+  ; Insert acc00 results (fields 1..32)
+  %r00.0  = extractelement <32 x i64> %mac00, i32 0
+  %r00.1  = extractelement <32 x i64> %mac00, i32 1
+  %r00.2  = extractelement <32 x i64> %mac00, i32 2
+  %r00.3  = extractelement <32 x i64> %mac00, i32 3
+  %r00.4  = extractelement <32 x i64> %mac00, i32 4
+  %r00.5  = extractelement <32 x i64> %mac00, i32 5
+  %r00.6  = extractelement <32 x i64> %mac00, i32 6
+  %r00.7  = extractelement <32 x i64> %mac00, i32 7
+  %r00.8  = extractelement <32 x i64> %mac00, i32 8
+  %r00.9  = extractelement <32 x i64> %mac00, i32 9
+  %r00.10 = extractelement <32 x i64> %mac00, i32 10
+  %r00.11 = extractelement <32 x i64> %mac00, i32 11
+  %r00.12 = extractelement <32 x i64> %mac00, i32 12
+  %r00.13 = extractelement <32 x i64> %mac00, i32 13
+  %r00.14 = extractelement <32 x i64> %mac00, i32 14
+  %r00.15 = extractelement <32 x i64> %mac00, i32 15
+  %r00.16 = extractelement <32 x i64> %mac00, i32 16
+  %r00.17 = extractelement <32 x i64> %mac00, i32 17
+  %r00.18 = extractelement <32 x i64> %mac00, i32 18
+  %r00.19 = extractelement <32 x i64> %mac00, i32 19
+  %r00.20 = extractelement <32 x i64> %mac00, i32 20
+  %r00.21 = extractelement <32 x i64> %mac00, i32 21
+  %r00.22 = extractelement <32 x i64> %mac00, i32 22
+  %r00.23 = extractelement <32 x i64> %mac00, i32 23
+  %r00.24 = extractelement <32 x i64> %mac00, i32 24
+  %r00.25 = extractelement <32 x i64> %mac00, i32 25
+  %r00.26 = extractelement <32 x i64> %mac00, i32 26
+  %r00.27 = extractelement <32 x i64> %mac00, i32 27
+  %r00.28 = extractelement <32 x i64> %mac00, i32 28
+  %r00.29 = extractelement <32 x i64> %mac00, i32 29
+  %r00.30 = extractelement <32 x i64> %mac00, i32 30
+  %r00.31 = extractelement <32 x i64> %mac00, i32 31
+
+  %s.1  = insertvalue %acc_state %s.0,  i64 %r00.0,  1
+  %s.2  = insertvalue %acc_state %s.1,  i64 %r00.1,  2
+  %s.3  = insertvalue %acc_state %s.2,  i64 %r00.2,  3
+  %s.4  = insertvalue %acc_state %s.3,  i64 %r00.3,  4
+  %s.5  = insertvalue %acc_state %s.4,  i64 %r00.4,  5
+  %s.6  = insertvalue %acc_state %s.5,  i64 %r00.5,  6
+  %s.7  = insertvalue %acc_state %s.6,  i64 %r00.6,  7
+  %s.8  = insertvalue %acc_state %s.7,  i64 %r00.7,  8
+  %s.9  = insertvalue %acc_state %s.8,  i64 %r00.8,  9
+  %s.10 = insertvalue %acc_state %s.9,  i64 %r00.9,  10
+  %s.11 = insertvalue %acc_state %s.10, i64 %r00.10, 11
+  %s.12 = insertvalue %acc_state %s.11, i64 %r00.11, 12
+  %s.13 = insertvalue %acc_state %s.12, i64 %r00.12, 13
+  %s.14 = insertvalue %acc_state %s.13, i64 %r00.13, 14
+  %s.15 = insertvalue %acc_state %s.14, i64 %r00.14, 15
+  %s.16 = insertvalue %acc_state %s.15, i64 %r00.15, 16
+  %s.17 = insertvalue %acc_state %s.16, i64 %r00.16, 17
+  %s.18 = insertvalue %acc_state %s.17, i64 %r00.17, 18
+  %s.19 = insertvalue %acc_state %s.18, i64 %r00.18, 19
+  %s.20 = insertvalue %acc_state %s.19, i64 %r00.19, 20
+  %s.21 = insertvalue %acc_state %s.20, i64 %r00.20, 21
+  %s.22 = insertvalue %acc_state %s.21, i64 %r00.21, 22
+  %s.23 = insertvalue %acc_state %s.22, i64 %r00.22, 23
+  %s.24 = insertvalue %acc_state %s.23, i64 %r00.23, 24
+  %s.25 = insertvalue %acc_state %s.24, i64 %r00.24, 25
+  %s.26 = insertvalue %acc_state %s.25, i64 %r00.25, 26
+  %s.27 = insertvalue %acc_state %s.26, i64 %r00.26, 27
+  %s.28 = insertvalue %acc_state %s.27, i64 %r00.27, 28
+  %s.29 = insertvalue %acc_state %s.28, i64 %r00.28, 29
+  %s.30 = insertvalue %acc_state %s.29, i64 %r00.29, 30
+  %s.31 = insertvalue %acc_state %s.30, i64 %r00.30, 31
+  %s.32 = insertvalue %acc_state %s.31, i64 %r00.31, 32
+
+  ; Insert acc01 results (fields 33..64)
+  %r01.0  = extractelement <32 x i64> %mac01, i32 0
+  %r01.1  = extractelement <32 x i64> %mac01, i32 1
+  %r01.2  = extractelement <32 x i64> %mac01, i32 2
+  %r01.3  = extractelement <32 x i64> %mac01, i32 3
+  %r01.4  = extractelement <32 x i64> %mac01, i32 4
+  %r01.5  = extractelement <32 x i64> %mac01, i32 5
+  %r01.6  = extractelement <32 x i64> %mac01, i32 6
+  %r01.7  = extractelement <32 x i64> %mac01, i32 7
+  %r01.8  = extractelement <32 x i64> %mac01, i32 8
+  %r01.9  = extractelement <32 x i64> %mac01, i32 9
+  %r01.10 = extractelement <32 x i64> %mac01, i32 10
+  %r01.11 = extractelement <32 x i64> %mac01, i32 11
+  %r01.12 = extractelement <32 x i64> %mac01, i32 12
+  %r01.13 = extractelement <32 x i64> %mac01, i32 13
+  %r01.14 = extractelement <32 x i64> %mac01, i32 14
+  %r01.15 = extractelement <32 x i64> %mac01, i32 15
+  %r01.16 = extractelement <32 x i64> %mac01, i32 16
+  %r01.17 = extractelement <32 x i64> %mac01, i32 17
+  %r01.18 = extractelement <32 x i64> %mac01, i32 18
+  %r01.19 = extractelement <32 x i64> %mac01, i32 19
+  %r01.20 = extractelement <32 x i64> %mac01, i32 20
+  %r01.21 = extractelement <32 x i64> %mac01, i32 21
+  %r01.22 = extractelement <32 x i64> %mac01, i32 22
+  %r01.23 = extractelement <32 x i64> %mac01, i32 23
+  %r01.24 = extractelement <32 x i64> %mac01, i32 24
+  %r01.25 = extractelement <32 x i64> %mac01, i32 25
+  %r01.26 = extractelement <32 x i64> %mac01, i32 26
+  %r01.27 = extractelement <32 x i64> %mac01, i32 27
+  %r01.28 = extractelement <32 x i64> %mac01, i32 28
+  %r01.29 = extractelement <32 x i64> %mac01, i32 29
+  %r01.30 = extractelement <32 x i64> %mac01, i32 30
+  %r01.31 = extractelement <32 x i64> %mac01, i32 31
+
+  %s.33 = insertvalue %acc_state %s.32, i64 %r01.0,  33
+  %s.34 = insertvalue %acc_state %s.33, i64 %r01.1,  34
+  %s.35 = insertvalue %acc_state %s.34, i64 %r01.2,  35
+  %s.36 = insertvalue %acc_state %s.35, i64 %r01.3,  36
+  %s.37 = insertvalue %acc_state %s.36, i64 %r01.4,  37
+  %s.38 = insertvalue %acc_state %s.37, i64 %r01.5,  38
+  %s.39 = insertvalue %acc_state %s.38, i64 %r01.6,  39
+  %s.40 = insertvalue %acc_state %s.39, i64 %r01.7,  40
+  %s.41 = insertvalue %acc_state %s.40, i64 %r01.8,  41
+  %s.42 = insertvalue %acc_state %s.41, i64 %r01.9,  42
+  %s.43 = insertvalue %acc_state %s.42, i64 %r01.10, 43
+  %s.44 = insertvalue %acc_state %s.43, i64 %r01.11, 44
+  %s.45 = insertvalue %acc_state %s.44, i64 %r01.12, 45
+  %s.46 = insertvalue %acc_state %s.45, i64 %r01.13, 46
+  %s.47 = insertvalue %acc_state %s.46, i64 %r01.14, 47
+  %s.48 = insertvalue %acc_state %s.47, i64 %r01.15, 48
+  %s.49 = insertvalue %acc_state %s.48, i64 %r01.16, 49
+  %s.50 = insertvalue %acc_state %s.49, i64 %r01.17, 50
+  %s.51 = insertvalue %acc_state %s.50, i64 %r01.18, 51
+  %s.52 = insertvalue %acc_state %s.51, i64 %r01.19, 52
+  %s.53 = insertvalue %acc_state %s.52, i64 %r01.20, 53
+  %s.54 = insertvalue %acc_state %s.53, i64 %r01.21, 54
+  %s.55 = insertvalue %acc_state %s.54, i64 %r01.22, 55
+  %s.56 = insertvalue %acc_state %s.55, i64 %r01.23, 56
+  %s.57 = insertvalue %acc_state %s.56, i64 %r01.24, 57
+  %s.58 = insertvalue %acc_state %s.57, i64 %r01.25, 58
+  %s.59 = insertvalue %acc_state %s.58, i64 %r01.26, 59
+  %s.60 = insertvalue %acc_state %s.59, i64 %r01.27, 60
+  %s.61 = insertvalue %acc_state %s.60, i64 %r01.28, 61
+  %s.62 = insertvalue %acc_state %s.61, i64 %r01.29, 62
+  %s.63 = insertvalue %acc_state %s.62, i64 %r01.30, 63
+  %s.64 = insertvalue %acc_state %s.63, i64 %r01.31, 64
+
+  ; Insert acc10 results (fields 65..96)
+  %r10.0  = extractelement <32 x i64> %mac10, i32 0
+  %r10.1  = extractelement <32 x i64> %mac10, i32 1
+  %r10.2  = extractelement <32 x i64> %mac10, i32 2
+  %r10.3  = extractelement <32 x i64> %mac10, i32 3
+  %r10.4  = extractelement <32 x i64> %mac10, i32 4
+  %r10.5  = extractelement <32 x i64> %mac10, i32 5
+  %r10.6  = extractelement <32 x i64> %mac10, i32 6
+  %r10.7  = extractelement <32 x i64> %mac10, i32 7
+  %r10.8  = extractelement <32 x i64> %mac10, i32 8
+  %r10.9  = extractelement <32 x i64> %mac10, i32 9
+  %r10.10 = extractelement <32 x i64> %mac10, i32 10
+  %r10.11 = extractelement <32 x i64> %mac10, i32 11
+  %r10.12 = extractelement <32 x i64> %mac10, i32 12
+  %r10.13 = extractelement <32 x i64> %mac10, i32 13
+  %r10.14 = extractelement <32 x i64> %mac10, i32 14
+  %r10.15 = extractelement <32 x i64> %mac10, i32 15
+  %r10.16 = extractelement <32 x i64> %mac10, i32 16
+  %r10.17 = extractelement <32 x i64> %mac10, i32 17
+  %r10.18 = extractelement <32 x i64> %mac10, i32 18
+  %r10.19 = extractelement <32 x i64> %mac10, i32 19
+  %r10.20 = extractelement <32 x i64> %mac10, i32 20
+  %r10.21 = extractelement <32 x i64> %mac10, i32 21
+  %r10.22 = extractelement <32 x i64> %mac10, i32 22
+  %r10.23 = extractelement <32 x i64> %mac10, i32 23
+  %r10.24 = extractelement <32 x i64> %mac10, i32 24
+  %r10.25 = extractelement <32 x i64> %mac10, i32 25
+  %r10.26 = extractelement <32 x i64> %mac10, i32 26
+  %r10.27 = extractelement <32 x i64> %mac10, i32 27
+  %r10.28 = extractelement <32 x i64> %mac10, i32 28
+  %r10.29 = extractelement <32 x i64> %mac10, i32 29
+  %r10.30 = extractelement <32 x i64> %mac10, i32 30
+  %r10.31 = extractelement <32 x i64> %mac10, i32 31
+
+  %s.65 = insertvalue %acc_state %s.64, i64 %r10.0,  65
+  %s.66 = insertvalue %acc_state %s.65, i64 %r10.1,  66
+  %s.67 = insertvalue %acc_state %s.66, i64 %r10.2,  67
+  %s.68 = insertvalue %acc_state %s.67, i64 %r10.3,  68
+  %s.69 = insertvalue %acc_state %s.68, i64 %r10.4,  69
+  %s.70 = insertvalue %acc_state %s.69, i64 %r10.5,  70
+  %s.71 = insertvalue %acc_state %s.70, i64 %r10.6,  71
+  %s.72 = insertvalue %acc_state %s.71, i64 %r10.7,  72
+  %s.73 = insertvalue %acc_state %s.72, i64 %r10.8,  73
+  %s.74 = insertvalue %acc_state %s.73, i64 %r10.9,  74
+  %s.75 = insertvalue %acc_state %s.74, i64 %r10.10, 75
+  %s.76 = insertvalue %acc_state %s.75, i64 %r10.11, 76
+  %s.77 = insertvalue %acc_state %s.76, i64 %r10.12, 77
+  %s.78 = insertvalue %acc_state %s.77, i64 %r10.13, 78
+  %s.79 = insertvalue %acc_state %s.78, i64 %r10.14, 79
+  %s.80 = insertvalue %acc_state %s.79, i64 %r10.15, 80
+  %s.81 = insertvalue %acc_state %s.80, i64 %r10.16, 81
+  %s.82 = insertvalue %acc_state %s.81, i64 %r10.17, 82
+  %s.83 = insertvalue %acc_state %s.82, i64 %r10.18, 83
+  %s.84 = insertvalue %acc_state %s.83, i64 %r10.19, 84
+  %s.85 = insertvalue %acc_state %s.84, i64 %r10.20, 85
+  %s.86 = insertvalue %acc_state %s.85, i64 %r10.21, 86
+  %s.87 = insertvalue %acc_state %s.86, i64 %r10.22, 87
+  %s.88 = insertvalue %acc_state %s.87, i64 %r10.23, 88
+  %s.89 = insertvalue %acc_state %s.88, i64 %r10.24, 89
+  %s.90 = insertvalue %acc_state %s.89, i64 %r10.25, 90
+  %s.91 = insertvalue %acc_state %s.90, i64 %r10.26, 91
+  %s.92 = insertvalue %acc_state %s.91, i64 %r10.27, 92
+  %s.93 = insertvalue %acc_state %s.92, i64 %r10.28, 93
+  %s.94 = insertvalue %acc_state %s.93, i64 %r10.29, 94
+  %s.95 = insertvalue %acc_state %s.94, i64 %r10.30, 95
+  %s.96 = insertvalue %acc_state %s.95, i64 %r10.31, 96
+
+  ; Insert acc11 results (fields 97..128)
+  %r11.0  = extractelement <32 x i64> %mac11, i32 0
+  %r11.1  = extractelement <32 x i64> %mac11, i32 1
+  %r11.2  = extractelement <32 x i64> %mac11, i32 2
+  %r11.3  = extractelement <32 x i64> %mac11, i32 3
+  %r11.4  = extractelement <32 x i64> %mac11, i32 4
+  %r11.5  = extractelement <32 x i64> %mac11, i32 5
+  %r11.6  = extractelement <32 x i64> %mac11, i32 6
+  %r11.7  = extractelement <32 x i64> %mac11, i32 7
+  %r11.8  = extractelement <32 x i64> %mac11, i32 8
+  %r11.9  = extractelement <32 x i64> %mac11, i32 9
+  %r11.10 = extractelement <32 x i64> %mac11, i32 10
+  %r11.11 = extractelement <32 x i64> %mac11, i32 11
+  %r11.12 = extractelement <32 x i64> %mac11, i32 12
+  %r11.13 = extractelement <32 x i64> %mac11, i32 13
+  %r11.14 = extractelement <32 x i64> %mac11, i32 14
+  %r11.15 = extractelement <32 x i64> %mac11, i32 15
+  %r11.16 = extractelement <32 x i64> %mac11, i32 16
+  %r11.17 = extractelement <32 x i64> %mac11, i32 17
+  %r11.18 = extractelement <32 x i64> %mac11, i32 18
+  %r11.19 = extractelement <32 x i64> %mac11, i32 19
+  %r11.20 = extractelement <32 x i64> %mac11, i32 20
+  %r11.21 = extractelement <32 x i64> %mac11, i32 21
+  %r11.22 = extractelement <32 x i64> %mac11, i32 22
+  %r11.23 = extractelement <32 x i64> %mac11, i32 23
+  %r11.24 = extractelement <32 x i64> %mac11, i32 24
+  %r11.25 = extractelement <32 x i64> %mac11, i32 25
+  %r11.26 = extractelement <32 x i64> %mac11, i32 26
+  %r11.27 = extractelement <32 x i64> %mac11, i32 27
+  %r11.28 = extractelement <32 x i64> %mac11, i32 28
+  %r11.29 = extractelement <32 x i64> %mac11, i32 29
+  %r11.30 = extractelement <32 x i64> %mac11, i32 30
+  %r11.31 = extractelement <32 x i64> %mac11, i32 31
+
+  %s.97  = insertvalue %acc_state %s.96,  i64 %r11.0,  97
+  %s.98  = insertvalue %acc_state %s.97,  i64 %r11.1,  98
+  %s.99  = insertvalue %acc_state %s.98,  i64 %r11.2,  99
+  %s.100 = insertvalue %acc_state %s.99,  i64 %r11.3,  100
+  %s.101 = insertvalue %acc_state %s.100, i64 %r11.4,  101
+  %s.102 = insertvalue %acc_state %s.101, i64 %r11.5,  102
+  %s.103 = insertvalue %acc_state %s.102, i64 %r11.6,  103
+  %s.104 = insertvalue %acc_state %s.103, i64 %r11.7,  104
+  %s.105 = insertvalue %acc_state %s.104, i64 %r11.8,  105
+  %s.106 = insertvalue %acc_state %s.105, i64 %r11.9,  106
+  %s.107 = insertvalue %acc_state %s.106, i64 %r11.10, 107
+  %s.108 = insertvalue %acc_state %s.107, i64 %r11.11, 108
+  %s.109 = insertvalue %acc_state %s.108, i64 %r11.12, 109
+  %s.110 = insertvalue %acc_state %s.109, i64 %r11.13, 110
+  %s.111 = insertvalue %acc_state %s.110, i64 %r11.14, 111
+  %s.112 = insertvalue %acc_state %s.111, i64 %r11.15, 112
+  %s.113 = insertvalue %acc_state %s.112, i64 %r11.16, 113
+  %s.114 = insertvalue %acc_state %s.113, i64 %r11.17, 114
+  %s.115 = insertvalue %acc_state %s.114, i64 %r11.18, 115
+  %s.116 = insertvalue %acc_state %s.115, i64 %r11.19, 116
+  %s.117 = insertvalue %acc_state %s.116, i64 %r11.20, 117
+  %s.118 = insertvalue %acc_state %s.117, i64 %r11.21, 118
+  %s.119 = insertvalue %acc_state %s.118, i64 %r11.22, 119
+  %s.120 = insertvalue %acc_state %s.119, i64 %r11.23, 120
+  %s.121 = insertvalue %acc_state %s.120, i64 %r11.24, 121
+  %s.122 = insertvalue %acc_state %s.121, i64 %r11.25, 122
+  %s.123 = insertvalue %acc_state %s.122, i64 %r11.26, 123
+  %s.124 = insertvalue %acc_state %s.123, i64 %r11.27, 124
+  %s.125 = insertvalue %acc_state %s.124, i64 %r11.28, 125
+  %s.126 = insertvalue %acc_state %s.125, i64 %r11.29, 126
+  %s.127 = insertvalue %acc_state %s.126, i64 %r11.30, 127
+  %s.128 = insertvalue %acc_state %s.127, i64 %r11.31, 128
+
+  br label %k_continue
+
+k_continue:
+  %state_next = phi %acc_state [ %s.128, %k_body ]
+  br label %k_loop
+
+k_exit:
+  ; --- Extract final accumulators and apply SRS ---
+  ; Reconstruct acc00 from state for SRS
+  %f00.0  = extractvalue %acc_state %state, 1
+  %f00.1  = extractvalue %acc_state %state, 2
+  %f00.2  = extractvalue %acc_state %state, 3
+  %f00.3  = extractvalue %acc_state %state, 4
+  %f00.4  = extractvalue %acc_state %state, 5
+  %f00.5  = extractvalue %acc_state %state, 6
+  %f00.6  = extractvalue %acc_state %state, 7
+  %f00.7  = extractvalue %acc_state %state, 8
+  %f00.8  = extractvalue %acc_state %state, 9
+  %f00.9  = extractvalue %acc_state %state, 10
+  %f00.10 = extractvalue %acc_state %state, 11
+  %f00.11 = extractvalue %acc_state %state, 12
+  %f00.12 = extractvalue %acc_state %state, 13
+  %f00.13 = extractvalue %acc_state %state, 14
+  %f00.14 = extractvalue %acc_state %state, 15
+  %f00.15 = extractvalue %acc_state %state, 16
+  %f00.16 = extractvalue %acc_state %state, 17
+  %f00.17 = extractvalue %acc_state %state, 18
+  %f00.18 = extractvalue %acc_state %state, 19
+  %f00.19 = extractvalue %acc_state %state, 20
+  %f00.20 = extractvalue %acc_state %state, 21
+  %f00.21 = extractvalue %acc_state %state, 22
+  %f00.22 = extractvalue %acc_state %state, 23
+  %f00.23 = extractvalue %acc_state %state, 24
+  %f00.24 = extractvalue %acc_state %state, 25
+  %f00.25 = extractvalue %acc_state %state, 26
+  %f00.26 = extractvalue %acc_state %state, 27
+  %f00.27 = extractvalue %acc_state %state, 28
+  %f00.28 = extractvalue %acc_state %state, 29
+  %f00.29 = extractvalue %acc_state %state, 30
+  %f00.30 = extractvalue %acc_state %state, 31
+  %f00.31 = extractvalue %acc_state %state, 32
+
+  %fv00.0  = insertelement <32 x i64> undef, i64 %f00.0,  i32 0
+  %fv00.1  = insertelement <32 x i64> %fv00.0,  i64 %f00.1,  i32 1
+  %fv00.2  = insertelement <32 x i64> %fv00.1,  i64 %f00.2,  i32 2
+  %fv00.3  = insertelement <32 x i64> %fv00.2,  i64 %f00.3,  i32 3
+  %fv00.4  = insertelement <32 x i64> %fv00.3,  i64 %f00.4,  i32 4
+  %fv00.5  = insertelement <32 x i64> %fv00.4,  i64 %f00.5,  i32 5
+  %fv00.6  = insertelement <32 x i64> %fv00.5,  i64 %f00.6,  i32 6
+  %fv00.7  = insertelement <32 x i64> %fv00.6,  i64 %f00.7,  i32 7
+  %fv00.8  = insertelement <32 x i64> %fv00.7,  i64 %f00.8,  i32 8
+  %fv00.9  = insertelement <32 x i64> %fv00.8,  i64 %f00.9,  i32 9
+  %fv00.10 = insertelement <32 x i64> %fv00.9,  i64 %f00.10, i32 10
+  %fv00.11 = insertelement <32 x i64> %fv00.10, i64 %f00.11, i32 11
+  %fv00.12 = insertelement <32 x i64> %fv00.11, i64 %f00.12, i32 12
+  %fv00.13 = insertelement <32 x i64> %fv00.12, i64 %f00.13, i32 13
+  %fv00.14 = insertelement <32 x i64> %fv00.13, i64 %f00.14, i32 14
+  %fv00.15 = insertelement <32 x i64> %fv00.14, i64 %f00.15, i32 15
+  %fv00.16 = insertelement <32 x i64> %fv00.15, i64 %f00.16, i32 16
+  %fv00.17 = insertelement <32 x i64> %fv00.16, i64 %f00.17, i32 17
+  %fv00.18 = insertelement <32 x i64> %fv00.17, i64 %f00.18, i32 18
+  %fv00.19 = insertelement <32 x i64> %fv00.18, i64 %f00.19, i32 19
+  %fv00.20 = insertelement <32 x i64> %fv00.19, i64 %f00.20, i32 20
+  %fv00.21 = insertelement <32 x i64> %fv00.20, i64 %f00.21, i32 21
+  %fv00.22 = insertelement <32 x i64> %fv00.21, i64 %f00.22, i32 22
+  %fv00.23 = insertelement <32 x i64> %fv00.22, i64 %f00.23, i32 23
+  %fv00.24 = insertelement <32 x i64> %fv00.23, i64 %f00.24, i32 24
+  %fv00.25 = insertelement <32 x i64> %fv00.24, i64 %f00.25, i32 25
+  %fv00.26 = insertelement <32 x i64> %fv00.25, i64 %f00.26, i32 26
+  %fv00.27 = insertelement <32 x i64> %fv00.26, i64 %f00.27, i32 27
+  %fv00.28 = insertelement <32 x i64> %fv00.27, i64 %f00.28, i32 28
+  %fv00.29 = insertelement <32 x i64> %fv00.28, i64 %f00.29, i32 29
+  %fv00.30 = insertelement <32 x i64> %fv00.29, i64 %f00.30, i32 30
+  %fv00.31 = insertelement <32 x i64> %fv00.30, i64 %f00.31, i32 31
+
+  ; Reconstruct acc01
+  %f01.0  = extractvalue %acc_state %state, 33
+  %f01.1  = extractvalue %acc_state %state, 34
+  %f01.2  = extractvalue %acc_state %state, 35
+  %f01.3  = extractvalue %acc_state %state, 36
+  %f01.4  = extractvalue %acc_state %state, 37
+  %f01.5  = extractvalue %acc_state %state, 38
+  %f01.6  = extractvalue %acc_state %state, 39
+  %f01.7  = extractvalue %acc_state %state, 40
+  %f01.8  = extractvalue %acc_state %state, 41
+  %f01.9  = extractvalue %acc_state %state, 42
+  %f01.10 = extractvalue %acc_state %state, 43
+  %f01.11 = extractvalue %acc_state %state, 44
+  %f01.12 = extractvalue %acc_state %state, 45
+  %f01.13 = extractvalue %acc_state %state, 46
+  %f01.14 = extractvalue %acc_state %state, 47
+  %f01.15 = extractvalue %acc_state %state, 48
+  %f01.16 = extractvalue %acc_state %state, 49
+  %f01.17 = extractvalue %acc_state %state, 50
+  %f01.18 = extractvalue %acc_state %state, 51
+  %f01.19 = extractvalue %acc_state %state, 52
+  %f01.20 = extractvalue %acc_state %state, 53
+  %f01.21 = extractvalue %acc_state %state, 54
+  %f01.22 = extractvalue %acc_state %state, 55
+  %f01.23 = extractvalue %acc_state %state, 56
+  %f01.24 = extractvalue %acc_state %state, 57
+  %f01.25 = extractvalue %acc_state %state, 58
+  %f01.26 = extractvalue %acc_state %state, 59
+  %f01.27 = extractvalue %acc_state %state, 60
+  %f01.28 = extractvalue %acc_state %state, 61
+  %f01.29 = extractvalue %acc_state %state, 62
+  %f01.30 = extractvalue %acc_state %state, 63
+  %f01.31 = extractvalue %acc_state %state, 64
+
+  %fv01.0  = insertelement <32 x i64> undef, i64 %f01.0,  i32 0
+  %fv01.1  = insertelement <32 x i64> %fv01.0,  i64 %f01.1,  i32 1
+  %fv01.2  = insertelement <32 x i64> %fv01.1,  i64 %f01.2,  i32 2
+  %fv01.3  = insertelement <32 x i64> %fv01.2,  i64 %f01.3,  i32 3
+  %fv01.4  = insertelement <32 x i64> %fv01.3,  i64 %f01.4,  i32 4
+  %fv01.5  = insertelement <32 x i64> %fv01.4,  i64 %f01.5,  i32 5
+  %fv01.6  = insertelement <32 x i64> %fv01.5,  i64 %f01.6,  i32 6
+  %fv01.7  = insertelement <32 x i64> %fv01.6,  i64 %f01.7,  i32 7
+  %fv01.8  = insertelement <32 x i64> %fv01.7,  i64 %f01.8,  i32 8
+  %fv01.9  = insertelement <32 x i64> %fv01.8,  i64 %f01.9,  i32 9
+  %fv01.10 = insertelement <32 x i64> %fv01.9,  i64 %f01.10, i32 10
+  %fv01.11 = insertelement <32 x i64> %fv01.10, i64 %f01.11, i32 11
+  %fv01.12 = insertelement <32 x i64> %fv01.11, i64 %f01.12, i32 12
+  %fv01.13 = insertelement <32 x i64> %fv01.12, i64 %f01.13, i32 13
+  %fv01.14 = insertelement <32 x i64> %fv01.13, i64 %f01.14, i32 14
+  %fv01.15 = insertelement <32 x i64> %fv01.14, i64 %f01.15, i32 15
+  %fv01.16 = insertelement <32 x i64> %fv01.15, i64 %f01.16, i32 16
+  %fv01.17 = insertelement <32 x i64> %fv01.16, i64 %f01.17, i32 17
+  %fv01.18 = insertelement <32 x i64> %fv01.17, i64 %f01.18, i32 18
+  %fv01.19 = insertelement <32 x i64> %fv01.18, i64 %f01.19, i32 19
+  %fv01.20 = insertelement <32 x i64> %fv01.19, i64 %f01.20, i32 20
+  %fv01.21 = insertelement <32 x i64> %fv01.20, i64 %f01.21, i32 21
+  %fv01.22 = insertelement <32 x i64> %fv01.21, i64 %f01.22, i32 22
+  %fv01.23 = insertelement <32 x i64> %fv01.22, i64 %f01.23, i32 23
+  %fv01.24 = insertelement <32 x i64> %fv01.23, i64 %f01.24, i32 24
+  %fv01.25 = insertelement <32 x i64> %fv01.24, i64 %f01.25, i32 25
+  %fv01.26 = insertelement <32 x i64> %fv01.25, i64 %f01.26, i32 26
+  %fv01.27 = insertelement <32 x i64> %fv01.26, i64 %f01.27, i32 27
+  %fv01.28 = insertelement <32 x i64> %fv01.27, i64 %f01.28, i32 28
+  %fv01.29 = insertelement <32 x i64> %fv01.28, i64 %f01.29, i32 29
+  %fv01.30 = insertelement <32 x i64> %fv01.29, i64 %f01.30, i32 30
+  %fv01.31 = insertelement <32 x i64> %fv01.30, i64 %f01.31, i32 31
+
+  ; Reconstruct acc10
+  %f10.0  = extractvalue %acc_state %state, 65
+  %f10.1  = extractvalue %acc_state %state, 66
+  %f10.2  = extractvalue %acc_state %state, 67
+  %f10.3  = extractvalue %acc_state %state, 68
+  %f10.4  = extractvalue %acc_state %state, 69
+  %f10.5  = extractvalue %acc_state %state, 70
+  %f10.6  = extractvalue %acc_state %state, 71
+  %f10.7  = extractvalue %acc_state %state, 72
+  %f10.8  = extractvalue %acc_state %state, 73
+  %f10.9  = extractvalue %acc_state %state, 74
+  %f10.10 = extractvalue %acc_state %state, 75
+  %f10.11 = extractvalue %acc_state %state, 76
+  %f10.12 = extractvalue %acc_state %state, 77
+  %f10.13 = extractvalue %acc_state %state, 78
+  %f10.14 = extractvalue %acc_state %state, 79
+  %f10.15 = extractvalue %acc_state %state, 80
+  %f10.16 = extractvalue %acc_state %state, 81
+  %f10.17 = extractvalue %acc_state %state, 82
+  %f10.18 = extractvalue %acc_state %state, 83
+  %f10.19 = extractvalue %acc_state %state, 84
+  %f10.20 = extractvalue %acc_state %state, 85
+  %f10.21 = extractvalue %acc_state %state, 86
+  %f10.22 = extractvalue %acc_state %state, 87
+  %f10.23 = extractvalue %acc_state %state, 88
+  %f10.24 = extractvalue %acc_state %state, 89
+  %f10.25 = extractvalue %acc_state %state, 90
+  %f10.26 = extractvalue %acc_state %state, 91
+  %f10.27 = extractvalue %acc_state %state, 92
+  %f10.28 = extractvalue %acc_state %state, 93
+  %f10.29 = extractvalue %acc_state %state, 94
+  %f10.30 = extractvalue %acc_state %state, 95
+  %f10.31 = extractvalue %acc_state %state, 96
+
+  %fv10.0  = insertelement <32 x i64> undef, i64 %f10.0,  i32 0
+  %fv10.1  = insertelement <32 x i64> %fv10.0,  i64 %f10.1,  i32 1
+  %fv10.2  = insertelement <32 x i64> %fv10.1,  i64 %f10.2,  i32 2
+  %fv10.3  = insertelement <32 x i64> %fv10.2,  i64 %f10.3,  i32 3
+  %fv10.4  = insertelement <32 x i64> %fv10.3,  i64 %f10.4,  i32 4
+  %fv10.5  = insertelement <32 x i64> %fv10.4,  i64 %f10.5,  i32 5
+  %fv10.6  = insertelement <32 x i64> %fv10.5,  i64 %f10.6,  i32 6
+  %fv10.7  = insertelement <32 x i64> %fv10.6,  i64 %f10.7,  i32 7
+  %fv10.8  = insertelement <32 x i64> %fv10.7,  i64 %f10.8,  i32 8
+  %fv10.9  = insertelement <32 x i64> %fv10.8,  i64 %f10.9,  i32 9
+  %fv10.10 = insertelement <32 x i64> %fv10.9,  i64 %f10.10, i32 10
+  %fv10.11 = insertelement <32 x i64> %fv10.10, i64 %f10.11, i32 11
+  %fv10.12 = insertelement <32 x i64> %fv10.11, i64 %f10.12, i32 12
+  %fv10.13 = insertelement <32 x i64> %fv10.12, i64 %f10.13, i32 13
+  %fv10.14 = insertelement <32 x i64> %fv10.13, i64 %f10.14, i32 14
+  %fv10.15 = insertelement <32 x i64> %fv10.14, i64 %f10.15, i32 15
+  %fv10.16 = insertelement <32 x i64> %fv10.15, i64 %f10.16, i32 16
+  %fv10.17 = insertelement <32 x i64> %fv10.16, i64 %f10.17, i32 17
+  %fv10.18 = insertelement <32 x i64> %fv10.17, i64 %f10.18, i32 18
+  %fv10.19 = insertelement <32 x i64> %fv10.18, i64 %f10.19, i32 19
+  %fv10.20 = insertelement <32 x i64> %fv10.19, i64 %f10.20, i32 20
+  %fv10.21 = insertelement <32 x i64> %fv10.20, i64 %f10.21, i32 21
+  %fv10.22 = insertelement <32 x i64> %fv10.21, i64 %f10.22, i32 22
+  %fv10.23 = insertelement <32 x i64> %fv10.22, i64 %f10.23, i32 23
+  %fv10.24 = insertelement <32 x i64> %fv10.23, i64 %f10.24, i32 24
+  %fv10.25 = insertelement <32 x i64> %fv10.24, i64 %f10.25, i32 25
+  %fv10.26 = insertelement <32 x i64> %fv10.25, i64 %f10.26, i32 26
+  %fv10.27 = insertelement <32 x i64> %fv10.26, i64 %f10.27, i32 27
+  %fv10.28 = insertelement <32 x i64> %fv10.27, i64 %f10.28, i32 28
+  %fv10.29 = insertelement <32 x i64> %fv10.28, i64 %f10.29, i32 29
+  %fv10.30 = insertelement <32 x i64> %fv10.29, i64 %f10.30, i32 30
+  %fv10.31 = insertelement <32 x i64> %fv10.30, i64 %f10.31, i32 31
+
+  ; Reconstruct acc11
+  %f11.0  = extractvalue %acc_state %state, 97
+  %f11.1  = extractvalue %acc_state %state, 98
+  %f11.2  = extractvalue %acc_state %state, 99
+  %f11.3  = extractvalue %acc_state %state, 100
+  %f11.4  = extractvalue %acc_state %state, 101
+  %f11.5  = extractvalue %acc_state %state, 102
+  %f11.6  = extractvalue %acc_state %state, 103
+  %f11.7  = extractvalue %acc_state %state, 104
+  %f11.8  = extractvalue %acc_state %state, 105
+  %f11.9  = extractvalue %acc_state %state, 106
+  %f11.10 = extractvalue %acc_state %state, 107
+  %f11.11 = extractvalue %acc_state %state, 108
+  %f11.12 = extractvalue %acc_state %state, 109
+  %f11.13 = extractvalue %acc_state %state, 110
+  %f11.14 = extractvalue %acc_state %state, 111
+  %f11.15 = extractvalue %acc_state %state, 112
+  %f11.16 = extractvalue %acc_state %state, 113
+  %f11.17 = extractvalue %acc_state %state, 114
+  %f11.18 = extractvalue %acc_state %state, 115
+  %f11.19 = extractvalue %acc_state %state, 116
+  %f11.20 = extractvalue %acc_state %state, 117
+  %f11.21 = extractvalue %acc_state %state, 118
+  %f11.22 = extractvalue %acc_state %state, 119
+  %f11.23 = extractvalue %acc_state %state, 120
+  %f11.24 = extractvalue %acc_state %state, 121
+  %f11.25 = extractvalue %acc_state %state, 122
+  %f11.26 = extractvalue %acc_state %state, 123
+  %f11.27 = extractvalue %acc_state %state, 124
+  %f11.28 = extractvalue %acc_state %state, 125
+  %f11.29 = extractvalue %acc_state %state, 126
+  %f11.30 = extractvalue %acc_state %state, 127
+  %f11.31 = extractvalue %acc_state %state, 128
+
+  %fv11.0  = insertelement <32 x i64> undef, i64 %f11.0,  i32 0
+  %fv11.1  = insertelement <32 x i64> %fv11.0,  i64 %f11.1,  i32 1
+  %fv11.2  = insertelement <32 x i64> %fv11.1,  i64 %f11.2,  i32 2
+  %fv11.3  = insertelement <32 x i64> %fv11.2,  i64 %f11.3,  i32 3
+  %fv11.4  = insertelement <32 x i64> %fv11.3,  i64 %f11.4,  i32 4
+  %fv11.5  = insertelement <32 x i64> %fv11.4,  i64 %f11.5,  i32 5
+  %fv11.6  = insertelement <32 x i64> %fv11.5,  i64 %f11.6,  i32 6
+  %fv11.7  = insertelement <32 x i64> %fv11.6,  i64 %f11.7,  i32 7
+  %fv11.8  = insertelement <32 x i64> %fv11.7,  i64 %f11.8,  i32 8
+  %fv11.9  = insertelement <32 x i64> %fv11.8,  i64 %f11.9,  i32 9
+  %fv11.10 = insertelement <32 x i64> %fv11.9,  i64 %f11.10, i32 10
+  %fv11.11 = insertelement <32 x i64> %fv11.10, i64 %f11.11, i32 11
+  %fv11.12 = insertelement <32 x i64> %fv11.11, i64 %f11.12, i32 12
+  %fv11.13 = insertelement <32 x i64> %fv11.12, i64 %f11.13, i32 13
+  %fv11.14 = insertelement <32 x i64> %fv11.13, i64 %f11.14, i32 14
+  %fv11.15 = insertelement <32 x i64> %fv11.14, i64 %f11.15, i32 15
+  %fv11.16 = insertelement <32 x i64> %fv11.15, i64 %f11.16, i32 16
+  %fv11.17 = insertelement <32 x i64> %fv11.16, i64 %f11.17, i32 17
+  %fv11.18 = insertelement <32 x i64> %fv11.17, i64 %f11.18, i32 18
+  %fv11.19 = insertelement <32 x i64> %fv11.18, i64 %f11.19, i32 19
+  %fv11.20 = insertelement <32 x i64> %fv11.19, i64 %f11.20, i32 20
+  %fv11.21 = insertelement <32 x i64> %fv11.20, i64 %f11.21, i32 21
+  %fv11.22 = insertelement <32 x i64> %fv11.21, i64 %f11.22, i32 22
+  %fv11.23 = insertelement <32 x i64> %fv11.22, i64 %f11.23, i32 23
+  %fv11.24 = insertelement <32 x i64> %fv11.23, i64 %f11.24, i32 24
+  %fv11.25 = insertelement <32 x i64> %fv11.24, i64 %f11.25, i32 25
+  %fv11.26 = insertelement <32 x i64> %fv11.25, i64 %f11.26, i32 26
+  %fv11.27 = insertelement <32 x i64> %fv11.26, i64 %f11.27, i32 27
+  %fv11.28 = insertelement <32 x i64> %fv11.27, i64 %f11.28, i32 28
+  %fv11.29 = insertelement <32 x i64> %fv11.28, i64 %f11.29, i32 29
+  %fv11.30 = insertelement <32 x i64> %fv11.29, i64 %f11.30, i32 30
+  %fv11.31 = insertelement <32 x i64> %fv11.30, i64 %f11.31, i32 31
+
+  ; SRS: shift-round-saturate to i16
+  %srs00 = call <32 x i16> @llvm.aie2p.I512.v32.acc64.srs(<32 x i64> %fv00.31, i32 0, i32 0)
+  %srs01 = call <32 x i16> @llvm.aie2p.I512.v32.acc64.srs(<32 x i64> %fv01.31, i32 0, i32 0)
+  %srs10 = call <32 x i16> @llvm.aie2p.I512.v32.acc64.srs(<32 x i64> %fv10.31, i32 0, i32 0)
+  %srs11 = call <32 x i16> @llvm.aie2p.I512.v32.acc64.srs(<32 x i64> %fv11.31, i32 0, i32 0)
+
+  ; Store results
+  store <32 x i16> %srs00, <32 x i16>* %out0
+  store <32 x i16> %srs01, <32 x i16>* %out1
+  store <32 x i16> %srs10, <32 x i16>* %out2
+  store <32 x i16> %srs11, <32 x i16>* %out3
+
+  ret void
+}
